@@ -2,20 +2,22 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 
 enum SmoothingFilter {
-    /// Applies Gaussian blur smoothing blended via dissolve transition.
+    /// Applies skin smoothing with dynamic radius scaled by slider amount.
     ///
     /// - Parameters:
     ///   - ciImage: The source image to smooth.
-    ///   - radius: Fixed spatial extent of the Gaussian blur.
-    ///   - amount: Intensity factor [0..1] controlling dissolve transition blend time.
+    ///   - radius: Blur radius for skin softening.
+    ///   - amount: Intensity factor [0..1] controlling blur radius and blend transition.
     /// - Returns: Smoothed image blended with original.
-    static func apply(to ciImage: CIImage, radius: CGFloat = 8.0, amount: Float) -> CIImage {
+    static func apply(to ciImage: CIImage, radius: CGFloat = 20.0, amount: Float) -> CIImage {
         guard amount > 0 else { return ciImage }
+
+        let effectiveRadius = max(4.0, radius * CGFloat(amount))
 
         let blurred = ciImage
             .clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [
-                kCIInputRadiusKey: radius
+                kCIInputRadiusKey: effectiveRadius
             ])
             .cropped(to: ciImage.extent)
 

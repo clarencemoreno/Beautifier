@@ -30,7 +30,6 @@ final class EditViewModel: ObservableObject {
             let previewCI = try ImageLoader.downsampledPreviewCIImage(from: originalData, maxDimension: 2048)
             self.previewCI = previewCI
 
-            // Generate guaranteed CGImage from previewCI to avoid UIImage(data:).cgImage returning nil
             if let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) {
                 previewImage = UIImage(cgImage: previewCG)
 
@@ -76,10 +75,10 @@ final class EditViewModel: ObservableObject {
         } else if isDetectingFace {
             output = previewCI
         } else if let faceGeometry, let previewMask {
-            let radius = min(max(faceGeometry.faceBox.width * previewCI.extent.width * 0.04, 4), 15)
-            output = SkinSmoothing.apply(to: previewCI, mask: previewMask, radius: radius, amount: amount)
+            let baseRadius = max(12.0, faceGeometry.faceBox.width * previewCI.extent.width * 0.08)
+            output = SkinSmoothing.apply(to: previewCI, mask: previewMask, radius: baseRadius, amount: amount)
         } else {
-            output = SmoothingFilter.apply(to: previewCI, radius: 8, amount: amount)
+            output = SmoothingFilter.apply(to: previewCI, radius: 24, amount: amount)
         }
 
         guard let output, !Task.isCancelled else { return }
@@ -100,10 +99,10 @@ final class EditViewModel: ObservableObject {
             let output: CIImage
             if let faceGeometry {
                 let fullMask = SkinMaskBuilder.buildMask(for: ciImage, geometry: faceGeometry)
-                let radius = min(max(faceGeometry.faceBox.width * ciImage.extent.width * 0.04, 4), 15)
-                output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: radius, amount: amount)
+                let baseRadius = max(12.0, faceGeometry.faceBox.width * ciImage.extent.width * 0.08)
+                output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: baseRadius, amount: amount)
             } else {
-                output = SmoothingFilter.apply(to: ciImage, radius: 8, amount: amount)
+                output = SmoothingFilter.apply(to: ciImage, radius: 24, amount: amount)
             }
 
             let result = try ImageLoader.renderUIImage(from: output, scale: normalizedImage.scale)
