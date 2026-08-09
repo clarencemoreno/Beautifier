@@ -30,8 +30,16 @@ struct EditView: View {
             Divider()
 
             VStack(spacing: 16) {
-                if viewModel.noFaceDetected {
-                    Text("No face detected")
+                if viewModel.isDetectingFace {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Detecting face skin...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                } else if viewModel.noFaceDetected {
+                    Text("No face detected (global fallback active)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .accessibilityIdentifier("NoFaceDetectedText")
@@ -40,7 +48,6 @@ struct EditView: View {
                 Slider(value: $viewModel.amount, in: 0...1) {
                     Text("Smoothing: \(Int(viewModel.amount * 100))%")
                 }
-                .disabled(viewModel.noFaceDetected)
                 .onChange(of: viewModel.amount) { _, _ in
                     viewModel.renderPreview()
                 }
