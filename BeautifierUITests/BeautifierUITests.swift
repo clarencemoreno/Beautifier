@@ -23,9 +23,17 @@ final class BeautifierUITests: XCTestCase {
         XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider should exist")
         XCTAssertTrue(slider.isEnabled, "Slider should be enabled for adjusting smoothing intensity")
 
-        // Interact with slider
+        // 1. Verify initial slider value
+        let initialVal = slider.value as? String
+        
+        // 2. Drag slider to 0.8
         slider.adjust(toNormalizedSliderPosition: 0.8)
         
+        // 3. Verify slider value changed in UI hierarchy
+        let newVal = slider.value as? String
+        XCTAssertNotEqual(initialVal, newVal, "Slider value in UI hierarchy should update after dragging")
+
+        // 4. Test Mask Debug Toggle button
         let maskDebugButton = app.buttons["MaskDebugButton"]
         XCTAssertTrue(maskDebugButton.waitForExistence(timeout: 5.0), "Mask debug button should exist in toolbar")
         maskDebugButton.tap()
@@ -48,6 +56,9 @@ final class BeautifierUITests: XCTestCase {
         XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider should exist")
         XCTAssertTrue(slider.isEnabled, "Slider should remain enabled for global fallback smoothing")
         
+        let initialVal = slider.value as? String
         slider.adjust(toNormalizedSliderPosition: 0.9)
+        let newVal = slider.value as? String
+        XCTAssertNotEqual(initialVal, newVal, "Slider position should update on drag during fallback smoothing")
     }
 }
