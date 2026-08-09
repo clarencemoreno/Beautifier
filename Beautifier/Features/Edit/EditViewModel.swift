@@ -27,35 +27,30 @@ final class EditViewModel: ObservableObject {
 
     func load() {
         do {
-            previewCI = try ImageLoader.downsampledPreviewCIImage(from: originalData, maxDimension: 2048)
+            let previewCI = try ImageLoader.downsampledPreviewCIImage(from: originalData, maxDimension: 2048)
+            self.previewCI = previewCI
 
-            if let previewCI {
-                if let cgImage = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) {
-                    previewImage = UIImage(cgImage: cgImage)
-                }
-            }
+            // Generate guaranteed CGImage from previewCI to avoid UIImage(data:).cgImage returning nil
+            if let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) {
+                previewImage = UIImage(cgImage: previewCG)
 
-            let normalizedImage = try ImageLoader.normalizedImage(from: originalData)
+                Task.detached(priority: .userInitiated) {
+                    let geometry = FaceDetector.detectGeometry(in: previewCG)
 
-            Task.detached(priority: .userInitiated) {
-                let geometry: FaceGeometry?
-                if let cgImage = normalizedImage.cgImage {
-                    geometry = FaceDetector.detectGeometry(in: cgImage)
-                } else {
-                    geometry = nil
-                }
-
-                await MainActor.run {
-                    self.faceGeometry = geometry
-                    self.noFaceDetected = (geometry == nil)
-                    self.isDetectingFace = false
-                    if let previewCI = self.previewCI, let geometry = geometry {
-                        self.previewMask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry)
-                    } else {
-                        self.previewMask = nil
+                    await MainActor.run {
+                        self.faceGeometry = geometry
+                        self.noFaceDetected = (geometry == nil)
+                        self.isDetectingFace = false
+                        if let geometry = geometry {
+                            self.previewMask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry)
+                        } else {
+                            self.previewMask = nil
+                        }
+                        self.renderPreview()
                     }
-                    self.renderPreview()
                 }
+            } else {
+                isDetectingFace = false
             }
         } catch {
             isDetectingFace = false

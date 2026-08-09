@@ -14,15 +14,10 @@ struct EditView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity)
-                    .gesture(
-                        LongPressGesture(minimumDuration: 0.1)
-                            .onEnded { _ in
-                                withAnimation {
-                                    viewModel.showingOriginal.toggle()
-                                }
-                                viewModel.renderPreview()
-                            }
-                    )
+                    .onLongPressGesture(minimumDuration: 0.1, pressing: { isPressing in
+                        viewModel.showingOriginal = isPressing
+                        viewModel.renderPreview()
+                    }, perform: {})
             } else {
                 ProgressView("Loading…")
             }
