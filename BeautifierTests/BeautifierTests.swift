@@ -1,18 +1,29 @@
-//
-//  BeautifierTests.swift
-//  BeautifierTests
-//
-//  Created by ClyCesBon on 8/1/26.
-//
+import XCTest
+@testable import Beautifier
 
-import Testing
+final class BeautifierPipelineTests: XCTestCase {
 
-struct BeautifierTests {
+    func testFaceDetectionAndSkinMask() throws {
+        let bundle = Bundle(for: BeautifierPipelineTests.self)
+        guard let url = bundle.url(forResource: "test_face", withExtension: "jpg") ??
+                        Bundle.main.url(forResource: "test_face", withExtension: "jpg"),
+              let data = try? Data(contentsOf: url),
+              let normalized = try? ImageLoader.normalizedImage(from: data),
+              let cgImage = normalized.cgImage else {
+            XCTFail("Failed to load test_face.jpg")
+            return
+        }
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
-        // Swift Testing Documentation
-        // https://developer.apple.com/documentation/testing
+        let geometry = FaceDetector.detectGeometry(in: cgImage)
+        XCTAssertNotNil(geometry, "FaceDetector should detect face in test_face.jpg")
+
+        if let geometry {
+            let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data)
+            let mask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry)
+            XCTAssertNotNil(mask, "SkinMaskBuilder should generate mask")
+            
+            let output = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 8, amount: 0.5)
+            XCTAssertNotNil(output, "SkinSmoothing filter should produce output CIImage")
+        }
     }
-
 }

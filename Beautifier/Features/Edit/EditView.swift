@@ -41,6 +41,9 @@ struct EditView: View {
                     Text("Smoothing: \(Int(viewModel.amount * 100))%")
                 }
                 .disabled(viewModel.noFaceDetected)
+                .onChange(of: viewModel.amount) { _, _ in
+                    viewModel.renderPreview()
+                }
                 .accessibilityIdentifier("SmoothingSlider")
 
                 Button {
