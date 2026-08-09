@@ -29,8 +29,6 @@ final class EditViewModel: ObservableObject {
         do {
             previewCI = try ImageLoader.downsampledPreviewCIImage(from: originalData, maxDimension: 2048)
 
-            // Show the ORIGINAL image while face detection is in progress
-            // (not a globally-blurred version which is confusing)
             if let previewCI {
                 if let cgImage = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) {
                     previewImage = UIImage(cgImage: cgImage)
@@ -56,7 +54,6 @@ final class EditViewModel: ObservableObject {
                     } else {
                         self.previewMask = nil
                     }
-                    // Now render with the actual pipeline
                     self.renderPreview()
                 }
             }
@@ -82,14 +79,11 @@ final class EditViewModel: ObservableObject {
         } else if showingOriginal || amount <= 0 {
             output = previewCI
         } else if isDetectingFace {
-            // Still detecting — show original, don't apply any smoothing yet
             output = previewCI
         } else if let faceGeometry, let previewMask {
-            // Face detected — apply skin-only smoothing
             let radius = min(max(faceGeometry.faceBox.width * previewCI.extent.width * 0.04, 4), 15)
             output = SkinSmoothing.apply(to: previewCI, mask: previewMask, radius: radius, amount: amount)
         } else {
-            // No face detected — apply global fallback smoothing
             output = SmoothingFilter.apply(to: previewCI, radius: 8, amount: amount)
         }
 
@@ -128,22 +122,8 @@ final class EditViewModel: ObservableObject {
 
 // MARK: - Alert State
 
-enum AlertState {
-    case alert(title: String, message: String)
-
-    init(title: String, message: String) {
-        self = .alert(title: title, message: message)
-    }
-
-    var title: String {
-        switch self {
-        case .alert(let title, _): return title
-        }
-    }
-
-    var message: String {
-        switch self {
-        case .alert(_, let message): return message
-        }
-    }
+struct AlertState: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
 }
