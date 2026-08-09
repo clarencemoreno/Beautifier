@@ -3,14 +3,16 @@ import Vision
 
 struct FaceGeometry {
     let faceBox: CGRect          // normalized, enlarged, bottom-left origin
-    let exclusions: [CGRect]     // normalized rects: eyes, brows, lips
+    let exclusions: [CGRect]     // normalized rects in IMAGE coordinates: eyes, brows, lips
 }
 
 enum FaceGeometryBuilder {
     static func build(from observation: VNFaceObservation) -> FaceGeometry? {
         guard let lm = observation.landmarks else { return nil }
 
-        var box = observation.boundingBox
+        let originalBox = observation.boundingBox
+
+        var box = originalBox
         box.origin.x -= box.width * 0.15      // wider
         box.origin.y -= box.height * 0.10     // less below chin
         box.size.width *= 1.30
@@ -19,9 +21,20 @@ enum FaceGeometryBuilder {
 
         let regions = [lm.leftEye, lm.rightEye, lm.leftEyebrow,
                        lm.rightEyebrow, lm.outerLips]
+
+        // CRITICAL: VNFaceLandmarkRegion2D.normalizedPoints are relative to the
+        // FACE BOUNDING BOX, not the full image. We must convert them to
+        // image-normalized coordinates.
         let exclusions = regions.compactMap { region -> CGRect? in
             guard let region else { return nil }
-            let r = boundingRect(of: region.normalizedPoints)
+            // Convert face-box-relative points to image-relative points
+            let imagePoints = region.normalizedPoints.map { facePoint in
+                CGPoint(
+                    x: originalBox.origin.x + facePoint.x * originalBox.width,
+                    y: originalBox.origin.y + facePoint.y * originalBox.height
+                )
+            }
+            let r = boundingRect(of: imagePoints)
             return r.insetBy(dx: -r.width * 0.2, dy: -r.height * 0.2)
         }
         return FaceGeometry(faceBox: box, exclusions: exclusions)
