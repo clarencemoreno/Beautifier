@@ -1,43 +1,45 @@
-//
-//  BeautifierUITests.swift
-//  BeautifierUITests
-//
-//  Created by ClyCesBon on 8/1/26.
-//
-
 import XCTest
 
 final class BeautifierUITests: XCTestCase {
 
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testTryDemoPhotoLoadsEditView() throws {
         let app = XCUIApplication()
         app.launch()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // XCUIAutomation Documentation
-        // https://developer.apple.com/documentation/xcuiautomation
+        let demoButton = app.buttons["TryDemoPhoto"]
+        XCTAssertTrue(demoButton.waitForExistence(timeout: 5.0), "Try Demo Photo button should exist")
+
+        demoButton.tap()
+
+        let saveButton = app.buttons["SaveButton"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 5.0), "Save button should exist on Edit screen")
+
+        let maskDebugButton = app.buttons["MaskDebugButton"]
+        XCTAssertTrue(maskDebugButton.waitForExistence(timeout: 5.0), "Mask debug button should exist in toolbar")
+        
+        maskDebugButton.tap()
     }
 
     @MainActor
-    func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
-        }
+    func testNoFaceDetectedState() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let noFaceButton = app.buttons["TryDemoNoFacePhoto"]
+        XCTAssertTrue(noFaceButton.waitForExistence(timeout: 5.0), "Try Demo (No Face) button should exist")
+
+        noFaceButton.tap()
+
+        let noFaceText = app.staticTexts["NoFaceDetectedText"]
+        XCTAssertTrue(noFaceText.waitForExistence(timeout: 5.0), "No face detected hint text should appear")
+
+        let slider = app.sliders["SmoothingSlider"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider should exist")
+        XCTAssertFalse(slider.isEnabled, "Slider should be disabled when no face is detected")
     }
 }

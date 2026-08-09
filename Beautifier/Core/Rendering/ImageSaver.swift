@@ -1,7 +1,7 @@
 import UIKit
 import Photos
 
-enum PhotoSaver {
+enum ImageSaver {
     enum Error: LocalizedError {
         case authorizationDenied
         case saveFailed

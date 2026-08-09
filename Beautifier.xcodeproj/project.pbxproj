@@ -27,28 +27,7 @@
 		5B55FD5A301E0C82007FC18C /* Beautifier.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Beautifier.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5B55FD69301E0C83007FC18C /* BeautifierTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BeautifierTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5B55FD73301E0C83007FC18C /* BeautifierUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BeautifierUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		36F817FCCDFEBC22AEF86143 /* BeautifierApp.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; includeInIndex = 0; path = BeautifierApp.swift; sourceTree = "<group>"; };
-		D0648F68A6FC858F9890A9AC /* ContentView.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; includeInIndex = 0; path = ContentView.swift; sourceTree = "<group>"; };
-		AFB6D6A25B03CE223F9C1FDB /* CameraView.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; includeInIndex = 0; path = CameraView.swift; sourceTree = "<group>"; };
-		2045251C252581653B856410 /* LiveBeautifyCameraView.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; includeInIndex = 0; path = LiveBeautifyCameraView.swift; sourceTree = "<group>"; };
-		E4518B46B00B53C13CF2B527 /* ImageProcessing.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; includeInIndex = 0; path = ImageProcessing.swift; sourceTree = "<group>"; };
-		A7173323BA61D091FC1884FC /* PhotoSaver.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; includeInIndex = 0; path = PhotoSaver.swift; sourceTree = "<group>"; };
-		8D8A904970D17843AD475EC /* RenderContext.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; includeInIndex = 0; path = RenderContext.swift; sourceTree = "<group>"; };
-		2BD7F145E394065FEC1BDC86 /* Assets.xcassets */ = {isa = PBXFileReference; explicitFileType = folder.assetcatalog; includeInIndex = 0; path = Assets.xcassets; sourceTree = "<group>"; };
-		80DF3381640656108972B8C1 /* sample_face.jpg */ = {isa = PBXFileReference; explicitFileType = image.jpeg; includeInIndex = 0; path = sample_face.jpg; sourceTree = "<group>"; };
 /* End PBXFileReference section */
-
-/* Begin PBXBuildFile section */
-		A98360615FB356E500207AD /* BeautifierApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36F817FCCDFEBC22AEF86143 /* BeautifierApp.swift */; };
-		4CED564384C7CAE584BA5DD /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0648F68A6FC858F9890A9AC /* ContentView.swift */; };
-		E45278A71030F7B9C2FD94DF /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFB6D6A25B03CE223F9C1FDB /* CameraView.swift */; };
-		08520D6A6EFA3DB7324D58AB /* LiveBeautifyCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2045251C252581653B856410 /* LiveBeautifyCameraView.swift */; };
-		FE9FE23A7FE8E749D9CDD4D8 /* ImageProcessing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4518B46B00B53C13CF2B527 /* ImageProcessing.swift */; };
-		AFCDC1173F5AF33AA738F81D /* PhotoSaver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7173323BA61D091FC1884FC /* PhotoSaver.swift */; };
-		2F3A87A740AC3C2C2E32912F /* RenderContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D8A904970D17843AD475EC /* RenderContext.swift */; };
-		CD3958888B1F1C3DF19B6909 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2BD7F145E394065FEC1BDC86 /* Assets.xcassets */; };
-		910568F1D173BB2B6BFBD6DA /* sample_face.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 80DF3381640656108972B8C1 /* sample_face.jpg */; };
-/* End PBXBuildFile section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		5B55FD5D301E0C82007FC18C /* Exceptions for "Beautifier" folder in "Beautifier" target */ = {
@@ -63,20 +42,22 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		5B55FD5C301E0C82007FC18C /* Beautifier */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			children = (
-				36F817FCCDFEBC22AEF86143 /* BeautifierApp.swift */,
-				D0648F68A6FC858F9890A9AC /* ContentView.swift */,
-				AFB6D6A25B03CE223F9C1FDB /* CameraView.swift */,
-				2045251C252581653B856410 /* LiveBeautifyCameraView.swift */,
-				E4518B46B00B53C13CF2B527 /* ImageProcessing.swift */,
-				A7173323BA61D091FC1884FC /* PhotoSaver.swift */,
-				8D8A904970D17843AD475EC /* RenderContext.swift */,
-				2BD7F145E394065FEC1BDC86 /* Assets.xcassets */,
-				80DF3381640656108972B8C1 /* sample_face.jpg */,
-			);
 			exceptions = (
 				5B55FD5D301E0C82007FC18C /* Exceptions for "Beautifier" folder in "Beautifier" target */,
 			);
+			explicitFileTypes = {
+				Assets.xcassets = folder.assetcatalog;
+				BeautifierApp.swift = sourcecode.swift;
+				Core/Filters/SmoothingFilter.swift = sourcecode.swift;
+				Core/Rendering/ImageLoader.swift = sourcecode.swift;
+				Core/Rendering/ImageSaver.swift = sourcecode.swift;
+				Features/Edit/EditView.swift = sourcecode.swift;
+				Features/Edit/EditViewModel.swift = sourcecode.swift;
+				Features/Home/HomeView.swift = sourcecode.swift;
+				RenderContext.swift = sourcecode.swift;
+				sample_face.jpg = image.jpeg;
+				test_face.jpg = image.jpeg;
+			};
 			path = Beautifier;
 			sourceTree = "<group>";
 		};
@@ -257,8 +238,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CD3958888B1F1C3DF19B6909 /* Assets.xcassets in Resources */,
-				910568F1D173BB2B6BFBD6DA /* sample_face.jpg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -283,13 +262,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A98360615FB356E500207AD /* BeautifierApp.swift in Sources */,
-				4CED564384C7CAE584BA5DD /* ContentView.swift in Sources */,
-				E45278A71030F7B9C2FD94DF /* CameraView.swift in Sources */,
-				08520D6A6EFA3DB7324D58AB /* LiveBeautifyCameraView.swift in Sources */,
-				FE9FE23A7FE8E749D9CDD4D8 /* ImageProcessing.swift in Sources */,
-				AFCDC1173F5AF33AA738F81D /* PhotoSaver.swift in Sources */,
-				2F3A87A740AC3C2C2E32912F /* RenderContext.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
