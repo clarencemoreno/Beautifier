@@ -8,8 +8,6 @@ struct FaceGeometry {
 
 enum FaceGeometryBuilder {
     static func build(from observation: VNFaceObservation) -> FaceGeometry? {
-        guard let lm = observation.landmarks else { return nil }
-
         let originalBox = observation.boundingBox
 
         var box = originalBox
@@ -19,24 +17,26 @@ enum FaceGeometryBuilder {
         box.size.height *= 1.40               // extra upward = forehead
         box = box.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
 
-        let regions = [lm.leftEye, lm.rightEye, lm.leftEyebrow,
-                       lm.rightEyebrow, lm.outerLips]
+        let exclusions: [CGRect]
+        if let lm = observation.landmarks {
+            let regions = [lm.leftEye, lm.rightEye, lm.leftEyebrow,
+                           lm.rightEyebrow, lm.outerLips]
 
-        // CRITICAL: VNFaceLandmarkRegion2D.normalizedPoints are relative to the
-        // FACE BOUNDING BOX, not the full image. We must convert them to
-        // image-normalized coordinates.
-        let exclusions = regions.compactMap { region -> CGRect? in
-            guard let region else { return nil }
-            // Convert face-box-relative points to image-relative points
-            let imagePoints = region.normalizedPoints.map { facePoint in
-                CGPoint(
-                    x: originalBox.origin.x + facePoint.x * originalBox.width,
-                    y: originalBox.origin.y + facePoint.y * originalBox.height
-                )
+            exclusions = regions.compactMap { region -> CGRect? in
+                guard let region else { return nil }
+                let imagePoints = region.normalizedPoints.map { facePoint in
+                    CGPoint(
+                        x: originalBox.origin.x + facePoint.x * originalBox.width,
+                        y: originalBox.origin.y + facePoint.y * originalBox.height
+                    )
+                }
+                let r = boundingRect(of: imagePoints)
+                return r.insetBy(dx: -r.width * 0.2, dy: -r.height * 0.2)
             }
-            let r = boundingRect(of: imagePoints)
-            return r.insetBy(dx: -r.width * 0.2, dy: -r.height * 0.2)
+        } else {
+            exclusions = []
         }
+
         return FaceGeometry(faceBox: box, exclusions: exclusions)
     }
 
