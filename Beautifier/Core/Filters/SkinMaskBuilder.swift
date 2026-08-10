@@ -10,9 +10,12 @@ enum SkinMaskBuilder {
                                   bitmapInfo: CGImageAlphaInfo.none.rawValue)
         else { return nil }
 
+        // Vision, CGContext, and CIImage all share bottom-left origin (y = 0 at bottom).
         func px(_ r: CGRect) -> CGRect {
-            CGRect(x: r.minX * size.width, y: r.minY * size.height,
-                   width: r.width * size.width, height: r.height * size.height)
+            CGRect(x: r.minX * size.width,
+                   y: r.minY * size.height,
+                   width: r.width * size.width,
+                   height: r.height * size.height)
         }
         ctx.setFillColor(CGColor(gray: 0, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))

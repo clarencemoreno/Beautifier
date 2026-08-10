@@ -14,15 +14,10 @@ struct EditView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity)
-                    .gesture(
-                        LongPressGesture(minimumDuration: 0.1)
-                            .onEnded { _ in
-                                withAnimation {
-                                    viewModel.showingOriginal.toggle()
-                                }
-                                viewModel.renderPreview()
-                            }
-                    )
+                    .onLongPressGesture(minimumDuration: 0.1, pressing: { isPressing in
+                        viewModel.showingOriginal = isPressing
+                        viewModel.renderPreview()
+                    }, perform: {})
             } else {
                 ProgressView("Loading…")
             }
@@ -48,6 +43,7 @@ struct EditView: View {
                 Slider(value: $viewModel.amount, in: 0...1) {
                     Text("Smoothing: \(Int(viewModel.amount * 100))%")
                 }
+                .disabled(viewModel.noFaceDetected)
                 .onChange(of: viewModel.amount) { _, _ in
                     viewModel.renderPreview()
                 }
@@ -82,14 +78,12 @@ struct EditView: View {
                 .accessibilityIdentifier("MaskDebugButton")
             }
         }
-        .alert(viewModel.alert?.title ?? "", isPresented: .constant(viewModel.alert != nil)) {
-            Button("OK") {
-                viewModel.alert = nil
-            }
-        } message: {
-            if let alert = viewModel.alert {
-                Text(alert.message)
-            }
+        .alert(item: $viewModel.alert) { alertState in
+            Alert(
+                title: Text(alertState.title),
+                message: Text(alertState.message),
+                dismissButton: .default(Text("OK"))
+            )
         }
     }
 }

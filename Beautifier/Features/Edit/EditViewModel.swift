@@ -27,38 +27,29 @@ final class EditViewModel: ObservableObject {
 
     func load() {
         do {
-            previewCI = try ImageLoader.downsampledPreviewCIImage(from: originalData, maxDimension: 2048)
+            let previewCI = try ImageLoader.downsampledPreviewCIImage(from: originalData, maxDimension: 2048)
+            self.previewCI = previewCI
 
-            // Show the ORIGINAL image while face detection is in progress
-            // (not a globally-blurred version which is confusing)
-            if let previewCI {
-                if let cgImage = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) {
-                    previewImage = UIImage(cgImage: cgImage)
-                }
-            }
+            if let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) {
+                previewImage = UIImage(cgImage: previewCG)
 
-            let normalizedImage = try ImageLoader.normalizedImage(from: originalData)
+                Task.detached(priority: .userInitiated) {
+                    let geometry = FaceDetector.detectGeometry(in: previewCG)
 
-            Task.detached(priority: .userInitiated) {
-                let geometry: FaceGeometry?
-                if let cgImage = normalizedImage.cgImage {
-                    geometry = FaceDetector.detectGeometry(in: cgImage)
-                } else {
-                    geometry = nil
-                }
-
-                await MainActor.run {
-                    self.faceGeometry = geometry
-                    self.noFaceDetected = (geometry == nil)
-                    self.isDetectingFace = false
-                    if let previewCI = self.previewCI, let geometry = geometry {
-                        self.previewMask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry)
-                    } else {
-                        self.previewMask = nil
+                    await MainActor.run {
+                        self.faceGeometry = geometry
+                        self.noFaceDetected = (geometry == nil)
+                        self.isDetectingFace = false
+                        if let geometry = geometry {
+                            self.previewMask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry)
+                        } else {
+                            self.previewMask = nil
+                        }
+                        self.renderPreview()
                     }
-                    // Now render with the actual pipeline
-                    self.renderPreview()
                 }
+            } else {
+                isDetectingFace = false
             }
         } catch {
             isDetectingFace = false
@@ -82,15 +73,12 @@ final class EditViewModel: ObservableObject {
         } else if showingOriginal || amount <= 0 {
             output = previewCI
         } else if isDetectingFace {
-            // Still detecting — show original, don't apply any smoothing yet
             output = previewCI
         } else if let faceGeometry, let previewMask {
-            // Face detected — apply skin-only smoothing
-            let radius = min(max(faceGeometry.faceBox.width * previewCI.extent.width * 0.04, 4), 15)
-            output = SkinSmoothing.apply(to: previewCI, mask: previewMask, radius: radius, amount: amount)
+            let baseRadius = max(12.0, faceGeometry.faceBox.width * previewCI.extent.width * 0.08)
+            output = SkinSmoothing.apply(to: previewCI, mask: previewMask, radius: baseRadius, amount: amount)
         } else {
-            // No face detected — apply global fallback smoothing
-            output = SmoothingFilter.apply(to: previewCI, radius: 8, amount: amount)
+            output = SmoothingFilter.apply(to: previewCI, radius: 24, amount: amount)
         }
 
         guard let output, !Task.isCancelled else { return }
@@ -111,10 +99,10 @@ final class EditViewModel: ObservableObject {
             let output: CIImage
             if let faceGeometry {
                 let fullMask = SkinMaskBuilder.buildMask(for: ciImage, geometry: faceGeometry)
-                let radius = min(max(faceGeometry.faceBox.width * ciImage.extent.width * 0.04, 4), 15)
-                output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: radius, amount: amount)
+                let baseRadius = max(12.0, faceGeometry.faceBox.width * ciImage.extent.width * 0.08)
+                output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: baseRadius, amount: amount)
             } else {
-                output = SmoothingFilter.apply(to: ciImage, radius: 8, amount: amount)
+                output = SmoothingFilter.apply(to: ciImage, radius: 24, amount: amount)
             }
 
             let result = try ImageLoader.renderUIImage(from: output, scale: normalizedImage.scale)
@@ -128,22 +116,8 @@ final class EditViewModel: ObservableObject {
 
 // MARK: - Alert State
 
-enum AlertState {
-    case alert(title: String, message: String)
-
-    init(title: String, message: String) {
-        self = .alert(title: title, message: message)
-    }
-
-    var title: String {
-        switch self {
-        case .alert(let title, _): return title
-        }
-    }
-
-    var message: String {
-        switch self {
-        case .alert(_, let message): return message
-        }
-    }
+struct AlertState: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
 }
