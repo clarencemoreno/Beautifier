@@ -47,3 +47,17 @@
 | FR-W3-3 | Removal of YCbCr color heuristic kernel (`SkinColorMask.swift` deleted). | Verified |
 | FR-W3-4 | Landmark exclusions (eyes, brows, lips) composited over AI face segmentation mask. | Verified |
 | FR-W3-5 | High-resolution full-res parity rendering and save using AI face segmentation. | Verified |
+
+---
+
+## Week 3.5 Semantic Skin Parser Requirements
+
+### 1. Functional Requirements
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| FR-W3.5-1 | Core ML BiSeNet face-parsing model (`FaceParserSkin.mlpackage`) outputting per-pixel skin class probabilities. | Proposed |
+| FR-W3.5-2 | Natural exclusion by definition: eyes, eyebrows, lips, hair, clothing, and background are excluded in model output. | Proposed |
+| FR-W3.5-3 | Core ML execution via `SkinParserML.swift` running on Neural Engine (device) and CPU fallback (Simulator). | Proposed |
+| FR-W3.5-4 | Restored blur radius clamp (`min(max(faceWidth * 0.04, 4), 15)`) preventing over-smoothed airbrushed blobs. | Proposed |
+| FR-W3.5-5 | Deletion of legacy `FaceSegmenter.swift` ellipse fallback and rectangle landmark masks. | Proposed |
