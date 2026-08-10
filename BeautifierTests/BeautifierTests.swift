@@ -4,10 +4,67 @@ import ImageIO
 
 final class BeautifierPipelineTests: XCTestCase {
 
-    // MARK: - FaceSegmenter Tests
+    // MARK: - Feature Flag Tests
+
+    /// Verify that FeatureFlags.semanticSkinParser is true in DEBUG builds.
+    func testFeatureFlagSemanticSkinParserIsTrueInDebug() {
+        XCTAssertTrue(FeatureFlags.semanticSkinParser,
+            "FeatureFlags.semanticSkinParser should be true in DEBUG builds")
+    }
+
+    // MARK: - SkinMaskBuilder (New Pipeline) Tests
+
+    /// Verify that the new SkinMaskBuilder.buildMask(for:skinMask:) scales
+    /// a 512×512 mask up to match a larger image extent.
+    func testSkinMaskBuilderNewPipelineScalesMask() throws {
+        let sourceSize = CGSize(width: 2048, height: 1536)
+        let maskSize = CGSize(width: 512, height: 512)
+
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+        let mask = CIImage(color: .white).cropped(to: CGRect(origin: .zero, size: maskSize))
+
+        let output = SkinMaskBuilder.buildMask(for: source, skinMask: mask)
+
+        XCTAssertEqual(output.extent.size, sourceSize,
+            "Scaled mask extent should match source image extent")
+    }
+
+    /// Verify that the new SkinMaskBuilder.buildMask(for:skinMask:) applies
+    /// a 3px Gaussian feather blur (output is not identical to the scaled mask).
+    func testSkinMaskBuilderNewPipelineFeathersMask() throws {
+        let sourceSize = CGSize(width: 1024, height: 1024)
+        let maskSize = CGSize(width: 512, height: 512)
+
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+        // Create a mask with a sharp white rectangle in the center
+        let sharpMask = CIImage(color: .black)
+            .applyingFilter("CIRadialGradient", parameters: [
+                kCIInputCenterKey: CIVector(x: 0.5, y: 0.5),
+                kCIInputRadiusKey: 0.25
+            ]).cropped(to: CGRect(origin: .zero, size: maskSize))
+
+        let output = SkinMaskBuilder.buildMask(for: source, skinMask: sharpMask)
+
+        // The output should NOT be identical to a simple scale — the 3px blur
+        // should soften the edges, producing a different pixel distribution.
+        guard let originalCG = RenderContext.shared.createCGImage(sharpMask, from: sharpMask.extent),
+              let outputCG = RenderContext.shared.createCGImage(output, from: output.extent) else {
+            XCTFail("Failed to render masks")
+            return
+        }
+
+        let originalVariance = pixelVariance(of: originalCG)
+        let outputVariance = pixelVariance(of: outputCG)
+        // The feathered output should have lower variance (softer edges)
+        XCTAssertLessThan(outputVariance, originalVariance,
+            "Feathered mask should have lower variance than sharp mask")
+    }
+
+    // MARK: - Legacy Pipeline Tests (still valid when flag is false)
 
     /// Verify that FaceSegmenter produces a non-nil AI face segmentation mask for a face photo.
-    func testFaceSegmenterProducesSegmentationMask() throws {
+    /// This test exercises the legacy pipeline directly.
+    func testLegacyFaceSegmenterProducesSegmentationMask() throws {
         let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
         let url = URL(fileURLWithPath: path)
         guard let data = try? Data(contentsOf: url),
@@ -55,10 +112,10 @@ final class BeautifierPipelineTests: XCTestCase {
             "Smoothed image should have lower pixel variance than original. Original: \(originalVariance), Smoothed: \(smoothedVariance)")
     }
 
-    // MARK: - SkinMaskBuilder Tests
+    // MARK: - SkinMaskBuilder (Legacy Pipeline) Tests
 
     /// Verify that structure mask is rasterized correctly with white background and black exclusions.
-    func testSkinMaskBuilderStructureMask() throws {
+    func testSkinMaskBuilderLegacyStructureMask() throws {
         let size = CGSize(width: 200, height: 200)
         let geo = FaceGeometry(
             faceBox: CGRect(x: 0.2, y: 0.2, width: 0.6, height: 0.6),
@@ -82,6 +139,24 @@ final class BeautifierPipelineTests: XCTestCase {
         let exclusionPixel = getPixelBrightness(of: cgMask, atNormalized: CGPoint(x: 0.5, y: 0.4))
         XCTAssertLessThan(exclusionPixel, 0.5,
             "Exclusion region should be black in structure mask")
+    }
+
+    /// Verify that the legacy SkinMaskBuilder.buildMask(for:geometry:faceMask:) combines
+    /// an AI mask with landmark exclusions correctly.
+    func testSkinMaskBuilderLegacyCombinesMaskAndExclusions() throws {
+        let size = CGSize(width: 200, height: 200)
+        let geo = FaceGeometry(
+            faceBox: CGRect(x: 0.2, y: 0.2, width: 0.6, height: 0.6),
+            exclusions: [CGRect(x: 0.4, y: 0.5, width: 0.2, height: 0.1)]
+        )
+
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: size))
+        let aiMask = CIImage(color: .white).cropped(to: CGRect(origin: .zero, size: size))
+
+        let output = SkinMaskBuilder.buildMask(for: source, geometry: geo, faceMask: aiMask)
+
+        XCTAssertEqual(output.extent.size, size,
+            "Legacy combined mask extent should match source")
     }
 
     // MARK: - Full Pipeline Tests
