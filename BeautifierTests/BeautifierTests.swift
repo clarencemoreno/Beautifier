@@ -1,73 +1,32 @@
 import XCTest
+import ImageIO
 @testable import Beautifier
 
 final class BeautifierPipelineTests: XCTestCase {
 
-    // MARK: - SkinColorMask Tests
+    // MARK: - FaceSegmenter Tests
 
-    /// Verify that SkinColorMask produces a grayscale mask (not the original color image).
-    /// The old CIKL kernel returned nil and fell back to returning the original image.
-    func testSkinColorMaskProducesGrayscaleMask() throws {
-        // Create an image with a known skin-tone color (warm beige/tan)
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100))
-        let skinImage = renderer.image { ctx in
-            // Typical skin tone in RGB: ~(224, 172, 143)
-            UIColor(red: 224/255, green: 172/255, blue: 143/255, alpha: 1.0).setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
-        }
-
-        guard let data = skinImage.jpegData(compressionQuality: 1.0),
-              let ciImage = try? ImageLoader.downsampledPreviewCIImage(from: data) else {
-            XCTFail("Failed to create test CIImage")
+    /// Verify that FaceSegmenter produces a non-nil AI face segmentation mask for a face photo.
+    func testFaceSegmenterProducesSegmentationMask() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            XCTFail("Failed to load test_face.jpg CGImage")
             return
         }
 
-        let mask = SkinColorMask.apply(to: ciImage)
-
-        // Render mask to pixels
-        guard let cgMask = RenderContext.shared.createCGImage(mask, from: mask.extent) else {
-            XCTFail("Failed to render mask to CGImage")
-            return
-        }
-
-        // The mask for a uniform skin-tone image should be mostly white (skin detected)
-        let avgBrightness = averageBrightness(of: cgMask)
-        XCTAssertGreaterThan(avgBrightness, 0.3,
-            "Skin-tone image should produce a mostly bright mask, got avg brightness: \(avgBrightness)")
-    }
-
-    /// Verify that a non-skin-tone image produces a mostly dark mask.
-    func testSkinColorMaskRejectsNonSkinColors() throws {
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100))
-        let blueImage = renderer.image { ctx in
-            UIColor.systemBlue.setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
-        }
-
-        guard let data = blueImage.jpegData(compressionQuality: 1.0),
-              let ciImage = try? ImageLoader.downsampledPreviewCIImage(from: data) else {
-            XCTFail("Failed to create test CIImage")
-            return
-        }
-
-        let mask = SkinColorMask.apply(to: ciImage)
-        guard let cgMask = RenderContext.shared.createCGImage(mask, from: mask.extent) else {
-            XCTFail("Failed to render mask to CGImage")
-            return
-        }
-
-        let avgBrightness = averageBrightness(of: cgMask)
-        XCTAssertLessThan(avgBrightness, 0.3,
-            "Blue image should produce a mostly dark mask, got avg brightness: \(avgBrightness)")
+        let mask = FaceSegmenter.segmentFace(in: cgImage)
+        XCTAssertNotNil(mask, "FaceSegmenter should return a non-nil CIImage mask for a face photo")
     }
 
     // MARK: - SmoothingFilter Tests
 
-    /// Verify SmoothingFilter actually modifies the image (not a no-op from non-existent filter).
+    /// Verify SmoothingFilter actually modifies the image (reduces high-frequency variance).
     func testSmoothingFilterModifiesImage() throws {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100))
         let testImage = renderer.image { ctx in
-            // Create high-frequency pattern (checkerboard-like)
             for y in stride(from: 0, to: 100, by: 2) {
                 for x in stride(from: 0, to: 100, by: 2) {
                     let isWhite = (x / 2 + y / 2) % 2 == 0
@@ -90,7 +49,6 @@ final class BeautifierPipelineTests: XCTestCase {
             return
         }
 
-        // Smoothing should reduce variance (checkerboard → more uniform gray)
         let originalVariance = pixelVariance(of: originalCG)
         let smoothedVariance = pixelVariance(of: smoothedCG)
         XCTAssertLessThan(smoothedVariance, originalVariance,
@@ -99,12 +57,12 @@ final class BeautifierPipelineTests: XCTestCase {
 
     // MARK: - SkinMaskBuilder Tests
 
-    /// Verify that structure mask is rasterized correctly.
+    /// Verify that structure mask is rasterized correctly with white background and black exclusions.
     func testSkinMaskBuilderStructureMask() throws {
         let size = CGSize(width: 200, height: 200)
         let geo = FaceGeometry(
             faceBox: CGRect(x: 0.2, y: 0.2, width: 0.6, height: 0.6),
-            exclusions: [CGRect(x: 0.35, y: 0.55, width: 0.3, height: 0.1)] // "mouth" area
+            exclusions: [CGRect(x: 0.35, y: 0.55, width: 0.3, height: 0.1)]
         )
 
         guard let structMask = SkinMaskBuilder.rasterizeStructure(geo, size: size) else {
@@ -117,30 +75,25 @@ final class BeautifierPipelineTests: XCTestCase {
             return
         }
 
-        // Center of faceBox should be white (included)
-        let centerPixel = getPixelBrightness(of: cgMask, atNormalized: CGPoint(x: 0.5, y: 0.5))
-        XCTAssertGreaterThan(centerPixel, 0.5,
-            "Center of face box should be white in structure mask")
-
-        // Corner of image (outside face box) should be black
         let cornerPixel = getPixelBrightness(of: cgMask, atNormalized: CGPoint(x: 0.05, y: 0.05))
-        XCTAssertLessThan(cornerPixel, 0.5,
-            "Corner outside face box should be black in structure mask")
+        XCTAssertGreaterThan(cornerPixel, 0.5,
+            "Background should be white in structure mask")
+
+        let exclusionPixel = getPixelBrightness(of: cgMask, atNormalized: CGPoint(x: 0.5, y: 0.4))
+        XCTAssertLessThan(exclusionPixel, 0.5,
+            "Exclusion region should be black in structure mask")
     }
 
     // MARK: - Full Pipeline Tests
 
-    /// Integration test: verify SkinSmoothing only changes skin-region pixels.
+    /// Integration test: verify SkinSmoothing produces valid output with AI face mask.
     func testSkinSmoothingOnlyModifiesMaskedRegion() throws {
         let size = CGSize(width: 200, height: 200)
         let renderer = UIGraphicsImageRenderer(size: size)
 
-        // Create image: left half = skin color, right half = blue
         let testImage = renderer.image { ctx in
-            // Left half: skin-tone
             UIColor(red: 224/255, green: 172/255, blue: 143/255, alpha: 1.0).setFill()
             ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 200))
-            // Right half: blue (non-skin)
             UIColor.systemBlue.setFill()
             ctx.fill(CGRect(x: 100, y: 0, width: 100, height: 200))
         }
@@ -151,7 +104,6 @@ final class BeautifierPipelineTests: XCTestCase {
             return
         }
 
-        // Create a full-white mask (everything is "skin")
         let whiteMask = CIImage(color: .white).cropped(to: ciImage.extent)
         let output = SkinSmoothing.apply(to: ciImage, mask: whiteMask, radius: 8, amount: 1.0)
 
@@ -162,24 +114,18 @@ final class BeautifierPipelineTests: XCTestCase {
 
     // MARK: - FaceGeometry Coordinate Space Test
 
-    /// Verify that FaceGeometryBuilder correctly converts face-relative landmarks
-    /// to image-relative coordinates.
     func testFaceGeometryCoordinateConversion() throws {
-        // Use the demo face image if available; otherwise skip
-        guard let url = Bundle.main.url(forResource: "test_face", withExtension: "jpg")
-                ?? Bundle.main.url(forResource: "sample_face", withExtension: "jpg"),
-              let data = try? Data(contentsOf: url),
-              let uiImage = UIImage(data: data),
-              let cgImage = uiImage.cgImage else {
-            // No demo image available in test bundle — skip gracefully
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             return
         }
 
         let geometry = FaceDetector.detectGeometry(in: cgImage)
-        // If a face is detected, all exclusions should be within the face box (approximately)
         if let geo = geometry {
             for exclusion in geo.exclusions {
-                // Each exclusion should be within or near the enlarged face box
                 let enlargedFaceBox = geo.faceBox.insetBy(
                     dx: -geo.faceBox.width * 0.3,
                     dy: -geo.faceBox.height * 0.3

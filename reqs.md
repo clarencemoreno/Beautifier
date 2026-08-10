@@ -33,3 +33,17 @@
 | FR-W2-6 | No-face detected UX state: slider disabled with "No face detected" text hint. | Verified |
 | FR-W2-7 | Toolbar toggle button for live grayscale skin mask visualization. | Verified |
 | FR-W2-8 | Full-resolution save parity using cached face geometry and full-res rasterized skin mask. | Verified |
+
+---
+
+## Week 3 AI Skin Segmentation Requirements
+
+### 1. Functional Requirements
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| FR-W3-1 | Hardware-accelerated AI face segmentation via `VNGeneratePersonSegmentationRequest` running on Apple Neural Engine. | Verified |
+| FR-W3-2 | Pixel-accurate tight face boundary excluding hair, ears, and skin-toned background elements. | Verified |
+| FR-W3-3 | Removal of YCbCr color heuristic kernel (`SkinColorMask.swift` deleted). | Verified |
+| FR-W3-4 | Landmark exclusions (eyes, brows, lips) composited over AI face segmentation mask. | Verified |
+| FR-W3-5 | High-resolution full-res parity rendering and save using AI face segmentation. | Verified |

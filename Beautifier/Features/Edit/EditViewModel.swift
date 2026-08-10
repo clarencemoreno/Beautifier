@@ -18,6 +18,7 @@ final class EditViewModel: ObservableObject {
     private let originalData: Data
     private var previewCI: CIImage?
     private var previewMask: CIImage?
+    private var faceSegmentationMask: CIImage?
     private var renderTask: Task<Void, Never>?
 
     init(originalData: Data) {
@@ -35,13 +36,16 @@ final class EditViewModel: ObservableObject {
 
                 Task.detached(priority: .userInitiated) {
                     let geometry = FaceDetector.detectGeometry(in: previewCG)
+                    let aiMask = FaceSegmenter.segmentFace(in: previewCG)
 
                     await MainActor.run {
                         self.faceGeometry = geometry
+                        self.faceSegmentationMask = aiMask
                         self.noFaceDetected = (geometry == nil)
                         self.isDetectingFace = false
-                        if let geometry = geometry {
-                            self.previewMask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry)
+
+                        if let geometry = geometry, let aiMask = aiMask {
+                            self.previewMask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry, faceMask: aiMask)
                         } else {
                             self.previewMask = nil
                         }
@@ -97,8 +101,8 @@ final class EditViewModel: ObservableObject {
             guard let ciImage = CIImage(image: normalizedImage) else { return }
 
             let output: CIImage
-            if let faceGeometry {
-                let fullMask = SkinMaskBuilder.buildMask(for: ciImage, geometry: faceGeometry)
+            if let faceGeometry, let cgImage = normalizedImage.cgImage, let aiMask = FaceSegmenter.segmentFace(in: cgImage) {
+                let fullMask = SkinMaskBuilder.buildMask(for: ciImage, geometry: faceGeometry, faceMask: aiMask)
                 let baseRadius = max(12.0, faceGeometry.faceBox.width * ciImage.extent.width * 0.08)
                 output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: baseRadius, amount: amount)
             } else {
