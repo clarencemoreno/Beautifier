@@ -61,4 +61,25 @@ enum SkinMaskBuilder {
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 4])
             .cropped(to: image.extent)
     }
+
+    // MARK: — Semantic Skin Parser Path (Week 3.5)
+
+    /// Combines an ML-derived semantic skin mask with the source image.
+    ///
+    /// This is the **new** pipeline: the model's skin class already excludes
+    /// eyes, brows, lips, hair, clothing, and background — no rectangles needed.
+    ///
+    /// - Parameters:
+    ///   - image: Source input CIImage.
+    ///   - skinMask: Grayscale skin-probability mask from `SkinParserML` (512×512).
+    /// - Returns: Final feathered skin mask CIImage matching `image` extent.
+    static func buildMask(for image: CIImage, skinMask: CIImage) -> CIImage {
+        let scaleX = image.extent.width  / skinMask.extent.width
+        let scaleY = image.extent.height / skinMask.extent.height
+        return skinMask
+            .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+            .clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3])
+            .cropped(to: image.extent)
+    }
 }
