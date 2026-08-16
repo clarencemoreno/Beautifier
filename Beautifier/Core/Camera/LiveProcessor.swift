@@ -12,9 +12,9 @@ final class LiveProcessor {
     private var cachedFaceGeometry: FaceGeometry?
     private var lastFaceBox: CGRect?
 
-    func process(image: CIImage, amount: Float) -> CIImage {
-        guard amount > 0 else { return image }
+    var showMaskDebug: Bool = false
 
+    func process(image: CIImage, amount: Float) -> CIImage {
         // Trigger async inference if worker is idle
         triggerAsyncInferenceIfNeeded(for: image)
 
@@ -24,7 +24,11 @@ final class LiveProcessor {
         let activeGeometry = cachedFaceGeometry
         stateLock.unlock()
 
-        guard let activeMask else {
+        if showMaskDebug {
+            return activeMask ?? CIImage(color: .black).cropped(to: image.extent)
+        }
+
+        guard amount > 0, let activeMask else {
             // Warm-up or no face detected: return raw frame without blur
             return image
         }

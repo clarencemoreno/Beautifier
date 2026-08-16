@@ -6,6 +6,7 @@ struct CameraView: View {
     @State private var processor = LiveProcessor()
 
     @State private var amount: Float = 0.5
+    @State private var showMaskDebug: Bool = false
     @State private var capturedImageData: Data?
     @State private var isNavigatingToEdit: Bool = false
     @State private var isCapturing: Bool = false
@@ -21,6 +22,7 @@ struct CameraView: View {
                     permissionDeniedView
                 } else {
                     cameraPreview
+                    topOverlay
                     controlsOverlay
                 }
             }
@@ -56,6 +58,47 @@ struct CameraView: View {
         )
         .ignoresSafeArea()
         .accessibilityIdentifier("LiveCameraPreview")
+    }
+
+    private var topOverlay: some View {
+        VStack {
+            HStack {
+                // Live status badge
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                    Text("LIVE 30 FPS")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(.ultraThinMaterial)
+                .cornerRadius(12)
+
+                Spacer()
+
+                // Mask Debug Toggle Button
+                Button {
+                    showMaskDebug.toggle()
+                    processor.showMaskDebug = showMaskDebug
+                } label: {
+                    Image(systemName: showMaskDebug ? "eye.fill" : "eye")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(10)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                }
+                .accessibilityIdentifier("LiveMaskDebugButton")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+
+            Spacer()
+        }
     }
 
     private var controlsOverlay: some View {

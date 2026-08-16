@@ -19,7 +19,8 @@ final class CameraService: NSObject, ObservableObject {
 
     #if targetEnvironment(simulator)
     private var simulatorTimer: Timer?
-    private var simulatorPixelBuffer: CVPixelBuffer?
+    private var baseFaceImage: CGImage?
+    private var frameIndex: Double = 0
     #endif
 
     override init() {
@@ -37,7 +38,6 @@ final class CameraService: NSObject, ObservableObject {
             self.isAuthorized = true
             self.authorizationDenied = false
         }
-        // Load bundled face image and create a cached CVPixelBuffer
         guard let url = Bundle.main.url(forResource: "test_face", withExtension: "jpg") ??
                         Bundle.main.url(forResource: "sample_face", withExtension: "jpg"),
               let data = try? Data(contentsOf: url),
@@ -45,12 +45,15 @@ final class CameraService: NSObject, ObservableObject {
               let cgImage = uiImage.cgImage else {
             return
         }
-        self.simulatorPixelBuffer = createPixelBuffer(from: cgImage)
+        self.baseFaceImage = cgImage
     }
 
-    private func createPixelBuffer(from cgImage: CGImage) -> CVPixelBuffer? {
-        let width = cgImage.width
-        let height = cgImage.height
+    /// Generates dynamic video frames with natural handheld motion (swaying, panning, micro-zoom)
+    private func generateDynamicFrame(time: Double) -> CVPixelBuffer? {
+        guard let cgImage = baseFaceImage else { return nil }
+
+        let width = 720
+        let height = 1080
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
@@ -68,6 +71,8 @@ final class CameraService: NSObject, ObservableObject {
         guard status == kCVReturnSuccess, let buffer = pixelBuffer else { return nil }
 
         CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+
         let pxData = CVPixelBufferGetBaseAddress(buffer)
         let rgbColorSpace = CGColorSpaceCreateDeviceRGB()
         guard let context = CGContext(
@@ -79,11 +84,24 @@ final class CameraService: NSObject, ObservableObject {
             space: rgbColorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         ) else {
-            CVPixelBufferUnlockBaseAddress(buffer, [])
             return nil
         }
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        CVPixelBufferUnlockBaseAddress(buffer, [])
+
+        // Fill background
+        context.setFillColor(UIColor.black.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        // Dynamic handheld motion: sinusoidal pan and zoom
+        let offsetX = sin(time * 1.4) * 20.0
+        let offsetY = cos(time * 1.8) * 15.0
+        let zoom = 1.05 + sin(time * 0.9) * 0.04
+
+        let imgW = Double(width) * zoom
+        let imgH = Double(height) * zoom
+        let imgX = (Double(width) - imgW) / 2.0 + offsetX
+        let imgY = (Double(height) - imgH) / 2.0 + offsetY
+
+        context.draw(cgImage, in: CGRect(x: imgX, y: imgY, width: imgW, height: imgH))
         return buffer
     }
     #endif
@@ -207,9 +225,13 @@ final class CameraService: NSObject, ObservableObject {
         #if targetEnvironment(simulator)
         DispatchQueue.main.async {
             self.stopSimulatorFeed()
+            self.frameIndex = 0
             self.simulatorTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-                guard let self, let buffer = self.simulatorPixelBuffer else { return }
-                self.latestPixelBuffer = buffer
+                guard let self else { return }
+                self.frameIndex += (1.0 / 30.0)
+                if let buffer = self.generateDynamicFrame(time: self.frameIndex) {
+                    self.latestPixelBuffer = buffer
+                }
             }
         }
         #else
