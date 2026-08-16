@@ -17,12 +17,84 @@ final class CameraService: NSObject, ObservableObject {
     private var photoCompletion: ((Data?) -> Void)?
     private var isConfigured = false
 
+    #if targetEnvironment(simulator)
+    private var simulatorTimer: Timer?
+    private var simulatorPixelBuffer: CVPixelBuffer?
+    #endif
+
     override init() {
         super.init()
+        #if targetEnvironment(simulator)
+        prepareSimulatorFeed()
+        #else
         checkPermissions()
+        #endif
     }
 
+    #if targetEnvironment(simulator)
+    private func prepareSimulatorFeed() {
+        DispatchQueue.main.async {
+            self.isAuthorized = true
+            self.authorizationDenied = false
+        }
+        // Load bundled face image and create a cached CVPixelBuffer
+        guard let url = Bundle.main.url(forResource: "test_face", withExtension: "jpg") ??
+                        Bundle.main.url(forResource: "sample_face", withExtension: "jpg"),
+              let data = try? Data(contentsOf: url),
+              let uiImage = UIImage(data: data),
+              let cgImage = uiImage.cgImage else {
+            return
+        }
+        self.simulatorPixelBuffer = createPixelBuffer(from: cgImage)
+    }
+
+    private func createPixelBuffer(from cgImage: CGImage) -> CVPixelBuffer? {
+        let width = cgImage.width
+        let height = cgImage.height
+        var pixelBuffer: CVPixelBuffer?
+        let attrs: [CFString: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+            kCVPixelBufferMetalCompatibilityKey: true
+        ]
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_32BGRA,
+            attrs as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let buffer = pixelBuffer else { return nil }
+
+        CVPixelBufferLockBaseAddress(buffer, [])
+        let pxData = CVPixelBufferGetBaseAddress(buffer)
+        let rgbColorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: pxData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+            space: rgbColorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else {
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            return nil
+        }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        return buffer
+    }
+    #endif
+
     func checkPermissions() {
+        #if targetEnvironment(simulator)
+        DispatchQueue.main.async {
+            self.isAuthorized = true
+            self.authorizationDenied = false
+        }
+        #else
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             DispatchQueue.main.async {
@@ -52,9 +124,11 @@ final class CameraService: NSObject, ObservableObject {
         @unknown default:
             break
         }
+        #endif
     }
 
     private func configureSessionIfNeeded() {
+        #if !targetEnvironment(simulator)
         guard !isConfigured else { return }
 
         session.beginConfiguration()
@@ -90,11 +164,11 @@ final class CameraService: NSObject, ObservableObject {
         session.addOutput(photoOutput)
         photoOutput.isHighResolutionCaptureEnabled = true
 
-        // Configure deterministic portrait orientation and front-camera mirror
         configureConnection()
 
         session.commitConfiguration()
         isConfigured = true
+        #endif
     }
 
     private func configureConnection() {
@@ -130,6 +204,15 @@ final class CameraService: NSObject, ObservableObject {
     }
 
     func start() {
+        #if targetEnvironment(simulator)
+        DispatchQueue.main.async {
+            self.stopSimulatorFeed()
+            self.simulatorTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+                guard let self, let buffer = self.simulatorPixelBuffer else { return }
+                self.latestPixelBuffer = buffer
+            }
+        }
+        #else
         sessionQueue.async {
             guard self.isAuthorized else { return }
             self.configureSessionIfNeeded()
@@ -137,17 +220,39 @@ final class CameraService: NSObject, ObservableObject {
                 self.session.startRunning()
             }
         }
+        #endif
     }
 
     func stop() {
+        #if targetEnvironment(simulator)
+        DispatchQueue.main.async {
+            self.stopSimulatorFeed()
+        }
+        #else
         sessionQueue.async {
             if self.session.isRunning {
                 self.session.stopRunning()
             }
         }
+        #endif
     }
 
+    #if targetEnvironment(simulator)
+    private func stopSimulatorFeed() {
+        simulatorTimer?.invalidate()
+        simulatorTimer = nil
+    }
+    #endif
+
     func capturePhoto(completion: @escaping (Data?) -> Void) {
+        #if targetEnvironment(simulator)
+        let url = Bundle.main.url(forResource: "test_face", withExtension: "jpg") ??
+                  Bundle.main.url(forResource: "sample_face", withExtension: "jpg")
+        let data = url.flatMap { try? Data(contentsOf: $0) }
+        DispatchQueue.main.async {
+            completion(data)
+        }
+        #else
         sessionQueue.async {
             guard self.session.isRunning else {
                 DispatchQueue.main.async { completion(nil) }
@@ -158,6 +263,7 @@ final class CameraService: NSObject, ObservableObject {
             settings.isHighResolutionPhotoEnabled = true
             self.photoOutput.capturePhoto(with: settings, delegate: self)
         }
+        #endif
     }
 }
 
