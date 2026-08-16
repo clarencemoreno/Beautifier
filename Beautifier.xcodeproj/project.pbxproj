@@ -53,7 +53,6 @@
 				Core/Rendering/ImageSaver.swift = sourcecode.swift;
 				Features/Edit/EditView.swift = sourcecode.swift;
 				Features/Edit/EditViewModel.swift = sourcecode.swift;
-				Features/Home/HomeView.swift = sourcecode.swift;
 				RenderContext.swift = sourcecode.swift;
 				sample_face.jpg = image.jpeg;
 				test_face.jpg = image.jpeg;

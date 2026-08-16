@@ -7,63 +7,35 @@ final class BeautifierUITests: XCTestCase {
     }
 
     @MainActor
-    func testDirectStartupPresentsEditViewAndInteractsWithSlider() throws {
+    func testCameraViewPresentsControlsAndInteractsWithSlider() throws {
         let app = XCUIApplication()
         app.launch()
 
-        let saveButton = app.buttons["SaveButton"]
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 5.0), "Save button should exist on Edit screen")
+        // 1. Shutter button or Permission View must exist on CameraView launch
+        let shutterButton = app.buttons["ShutterButton"]
+        let openSettingsButton = app.buttons["OpenSettingsButton"]
 
-        let slider = app.sliders["SmoothingSlider"]
-        XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider element should exist on startup")
+        let hasCameraUI = shutterButton.waitForExistence(timeout: 5.0) || openSettingsButton.waitForExistence(timeout: 5.0)
+        XCTAssertTrue(hasCameraUI, "CameraView should display shutter controls or permission overlay on launch")
 
-        // Wait for background face detection to complete (spinner text disappears)
-        let detectingText = app.staticTexts["Detecting face skin..."]
-        if detectingText.exists {
-            let predicate = NSPredicate(format: "exists == false")
-            let exp = expectation(for: predicate, evaluatedWith: detectingText, handler: nil)
-            wait(for: [exp], timeout: 10.0)
+        // 2. If camera controls are visible, test live smoothing slider
+        let slider = app.sliders["LiveSmoothingSlider"]
+        if slider.waitForExistence(timeout: 2.0) {
+            XCTAssertTrue(slider.isEnabled, "Live smoothing slider should be interactive")
+            slider.adjust(toNormalizedSliderPosition: 0.8)
+            slider.adjust(toNormalizedSliderPosition: 0.2)
         }
-
-        // 1. Verify slider is enabled for face photo
-        XCTAssertTrue(slider.isEnabled, "Slider must be enabled when a face is detected")
-
-        // 2. Read initial slider value
-        let initialVal = slider.value as? String
-        XCTAssertNotNil(initialVal, "Slider accessibility value must exist")
-
-        // 3. Drag slider to position 0.8
-        slider.adjust(toNormalizedSliderPosition: 0.8)
-
-        // 4. Test Mask Debug Toggle button
-        let maskDebugButton = app.buttons["MaskDebugButton"]
-        XCTAssertTrue(maskDebugButton.waitForExistence(timeout: 5.0), "Mask debug button should exist in toolbar")
-        maskDebugButton.tap()
-
-        // Toggle mask debug back off
-        maskDebugButton.tap()
     }
 
     @MainActor
-    func testSliderInteractionRange() throws {
+    func testCameraShutterButtonExists() throws {
         let app = XCUIApplication()
         app.launch()
 
-        let slider = app.sliders["SmoothingSlider"]
-        XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider should exist on startup")
+        let shutterButton = app.buttons["ShutterButton"]
+        let openSettingsButton = app.buttons["OpenSettingsButton"]
 
-        // Wait for background face detection to complete
-        let detectingText = app.staticTexts["Detecting face skin..."]
-        if detectingText.exists {
-            let predicate = NSPredicate(format: "exists == false")
-            let exp = expectation(for: predicate, evaluatedWith: detectingText, handler: nil)
-            wait(for: [exp], timeout: 10.0)
-        }
-
-        XCTAssertTrue(slider.isEnabled, "Slider must be enabled when a face is detected")
-
-        slider.adjust(toNormalizedSliderPosition: 0.1)
-        slider.adjust(toNormalizedSliderPosition: 0.9)
-        XCTAssertNotNil(slider.value, "Slider should exist and be adjustable")
+        let exists = shutterButton.waitForExistence(timeout: 5.0) || openSettingsButton.waitForExistence(timeout: 5.0)
+        XCTAssertTrue(exists, "App must cleanly render CameraView UI without crashing")
     }
 }

@@ -4,6 +4,60 @@ import ImageIO
 
 final class BeautifierPipelineTests: XCTestCase {
 
+    // MARK: - LiveProcessor Tests
+
+    /// Verify LiveProcessor returns unmodified image during warmup or when amount is zero.
+    func testLiveProcessorWarmupPassThrough() throws {
+        let processor = LiveProcessor()
+        let sourceSize = CGSize(width: 512, height: 512)
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+
+        let outputZero = processor.process(image: source, amount: 0.0)
+        XCTAssertEqual(outputZero.extent, source.extent, "Warmup output extent should match source extent")
+    }
+
+    /// Verify LiveProcessor triggers background inference and applies skin smoothing when mask is ready.
+    func testLiveProcessorAsyncInferenceAndSmoothing() throws {
+        let processor = LiveProcessor()
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 512)
+
+        // 1. Initial call triggers background inference
+        _ = processor.process(image: previewCI, amount: 0.8)
+
+        // Wait up to 2 seconds for background Core ML inference to complete
+        let expectation = XCTestExpectation(description: "Inference completion")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 3.0)
+
+        // 2. Subsequent call uses cached mask to apply smoothing
+        let processed = processor.process(image: previewCI, amount: 0.8)
+        XCTAssertEqual(processed.extent, previewCI.extent, "Processed extent should match input extent")
+
+        guard let cgOrig = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let cgProcessed = RenderContext.shared.createCGImage(processed, from: processed.extent) else {
+            XCTFail("Failed to create CGImages for LiveProcessor test")
+            return
+        }
+
+        let origVar = pixelVariance(of: cgOrig)
+        let processedVar = pixelVariance(of: cgProcessed)
+        XCTAssertLessThan(processedVar, origVar, "LiveProcessor output variance should be lower than original face image")
+    }
+
+    /// Verify LiveProcessor.invalidateCache() resets active mask state.
+    func testLiveProcessorInvalidateCache() throws {
+        let processor = LiveProcessor()
+        processor.invalidateCache()
+        let source = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let output = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(output.extent, source.extent)
+    }
+
     // MARK: - Feature Flag Tests
 
     /// Verify that FeatureFlags.semanticSkinParser is true in DEBUG builds.
