@@ -69,7 +69,7 @@ struct MetalView: UIViewRepresentable {
             }
 
             let rawCIImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let processedImage = processor.process(image: rawCIImage, amount: currentAmount)
+            let processedImage = processor.process(image: rawCIImage, amount: currentAmount, buffer: pixelBuffer)
 
             let drawableSize = view.drawableSize
             guard drawableSize.width > 0, drawableSize.height > 0 else { return }

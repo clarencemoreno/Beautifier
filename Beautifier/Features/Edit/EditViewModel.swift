@@ -20,8 +20,9 @@ final class EditViewModel: ObservableObject {
     private var previewMask: CIImage?
     private var renderTask: Task<Void, Never>?
 
-    init(originalData: Data) {
+    init(originalData: Data, initialAmount: Float = 0.5) {
         self.originalData = originalData
+        self.amount = initialAmount
         load()
     }
 
@@ -110,26 +111,27 @@ final class EditViewModel: ObservableObject {
         // Move heavy full-res decoding and rendering off Main Thread
         let resultImage: UIImage? = await Task.detached(priority: .userInitiated) { () -> UIImage? in
             do {
-                let normalizedImage = try ImageLoader.normalizedImage(from: originalData)
-                guard let ciImage = CIImage(image: normalizedImage) else { return nil }
+                let fullResCI = try ImageLoader.fullResolutionCIImage(from: originalData)
 
                 let output: CIImage
                 if let previewMask = currentMask {
-                    // Reuse existing preview mask, scaled up to full-resolution extent
-                    let scaleX = ciImage.extent.width / previewMask.extent.width
-                    let scaleY = ciImage.extent.height / previewMask.extent.height
+                    // Reuse existing preview mask, scaled up to full-resolution extent in identical coordinate space
+                    let scaleX = fullResCI.extent.width / previewMask.extent.width
+                    let scaleY = fullResCI.extent.height / previewMask.extent.height
                     let fullMask = previewMask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
 
-                    let scale = ciImage.extent.width / 2048.0
+                    let scale = fullResCI.extent.width / 2048.0
                     let faceWidthRatio = currentGeometry?.faceBox.width ?? 0.5
-                    let baseRadius = max(6.0 * scale, faceWidthRatio * ciImage.extent.width * 0.05)
+                    let baseRadius = max(6.0 * scale, faceWidthRatio * fullResCI.extent.width * 0.05)
                     let radius = min(baseRadius, 15.0 * scale)
-                    output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: radius, amount: currentAmount)
+                    output = SkinSmoothing.apply(to: fullResCI, mask: fullMask, radius: radius, amount: currentAmount)
                 } else {
-                    output = SmoothingFilter.apply(to: ciImage, radius: 15, amount: currentAmount)
+                    let scale = fullResCI.extent.width / 2048.0
+                    let radius = 15.0 * scale
+                    output = SmoothingFilter.apply(to: fullResCI, radius: radius, amount: currentAmount)
                 }
 
-                return try? ImageLoader.renderUIImage(from: output, scale: normalizedImage.scale)
+                return try? ImageLoader.renderUIImage(from: output)
             } catch {
                 return nil
             }

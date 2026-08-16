@@ -48,6 +48,40 @@ final class BeautifierPipelineTests: XCTestCase {
         XCTAssertEqual(processor.inferenceRunCount, 2)
     }
 
+    /// Verify LiveProcessor deduplicates multiple render calls on the same camera buffer.
+    func testLiveProcessorDeduplicatesIdenticalBuffers() throws {
+        let processor = LiveProcessor()
+        let sourceSize = CGSize(width: 512, height: 512)
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+
+        var pixelBuffer1: CVPixelBuffer?
+        let attrs: [CFString: Any] = [kCVPixelBufferMetalCompatibilityKey: true]
+        CVPixelBufferCreate(kCFAllocatorDefault, 512, 512, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer1)
+        guard let buffer1 = pixelBuffer1 else {
+            XCTFail("Failed to create pixelBuffer1")
+            return
+        }
+
+        var pixelBuffer2: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, 512, 512, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer2)
+        guard let buffer2 = pixelBuffer2 else {
+            XCTFail("Failed to create pixelBuffer2")
+            return
+        }
+
+        // Render buffer1 5 times (simulating redundant redraws / FPS telemetry updates)
+        for _ in 1...5 {
+            _ = processor.process(image: source, amount: 0.5, buffer: buffer1)
+        }
+        // Only 1 frame count should be registered for buffer1
+        XCTAssertEqual(processor.frameCount, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Render buffer2 (a distinct new camera frame)
+        _ = processor.process(image: source, amount: 0.5, buffer: buffer2)
+        XCTAssertEqual(processor.frameCount, 2)
+    }
+
     /// Verify CameraGeometry aspect-fill calculation maintains uniform scaling and center alignment.
     func testCameraGeometryAspectFillMaintainsUniformScale() throws {
         let imageSize = CGSize(width: 720, height: 1280) // 9:16 portrait
@@ -66,13 +100,39 @@ final class BeautifierPipelineTests: XCTestCase {
         XCTAssertEqual(origin.y, (drawableSize.height - scaledH) / 2.0, accuracy: 0.01)
     }
 
-    /// Verify CameraService lifecycle transitions.
+    /// Verify CameraService lifecycle transitions and authorization state.
     func testCameraServiceLifecycle() throws {
         let camera = CameraService()
+        XCTAssertFalse(camera.isRunning, "CameraService should initially not be running")
+
         camera.start()
+        let startExp = XCTestExpectation(description: "Camera started")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            XCTAssertTrue(camera.isRunning, "CameraService should be running after start()")
+            startExp.fulfill()
+        }
+        wait(for: [startExp], timeout: 1.0)
+
         camera.stop()
+        let stopExp = XCTestExpectation(description: "Camera stopped")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            XCTAssertFalse(camera.isRunning, "CameraService should not be running after stop()")
+            stopExp.fulfill()
+        }
+        wait(for: [stopExp], timeout: 1.0)
+
         camera.checkPermissions()
-        XCTAssertTrue(camera.isAuthorized || camera.authorizationDenied || !camera.isAuthorized)
+        let permExp = XCTestExpectation(description: "Camera permissions checked")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            #if targetEnvironment(simulator)
+            XCTAssertTrue(camera.isAuthorized, "CameraService should be authorized in simulator")
+            XCTAssertFalse(camera.authorizationDenied, "Authorization should not be denied in simulator")
+            #else
+            XCTAssertNotEqual(camera.isAuthorized, camera.authorizationDenied, "isAuthorized and authorizationDenied should have distinct non-tautological states")
+            #endif
+            permExp.fulfill()
+        }
+        wait(for: [permExp], timeout: 1.0)
     }
 
     // MARK: - Feature Flag Tests
@@ -186,6 +246,41 @@ final class BeautifierPipelineTests: XCTestCase {
         XCTAssertGreaterThan(maskBright, 0.01, "Mask brightness must be non-zero")
         XCTAssertLessThan(softVar, origVar, "Softened image variance must be lower than original")
         XCTAssertLessThan(smoothedVar, origVar, "Smoothed image variance must be lower than original")
+    }
+
+    /// Verify that full resolution image decoding and processing correctly scales the mask and reduces pixel variance
+    func testFullResolutionProcessingAppliesSmoothingToPhoto() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+
+        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 2048)
+        guard let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let aiMask = SkinParserML.skinMask(for: previewCG) else {
+            XCTFail("Failed to detect face or generate mask")
+            return
+        }
+
+        let previewMask = SkinMaskBuilder.buildMask(for: previewCI, skinMask: aiMask)
+        let fullResCI = try ImageLoader.fullResolutionCIImage(from: data)
+
+        let scaleX = fullResCI.extent.width / previewMask.extent.width
+        let scaleY = fullResCI.extent.height / previewMask.extent.height
+        let fullMask = previewMask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+
+        let scale = fullResCI.extent.width / 2048.0
+        let radius = 15.0 * scale
+        let smoothedOutput = SkinSmoothing.apply(to: fullResCI, mask: fullMask, radius: radius, amount: 1.0)
+
+        guard let origCG = RenderContext.shared.createCGImage(fullResCI, from: fullResCI.extent),
+              let smoothedCG = RenderContext.shared.createCGImage(smoothedOutput, from: smoothedOutput.extent) else {
+            XCTFail("Failed to render full resolution images")
+            return
+        }
+
+        let origVar = pixelVariance(of: origCG)
+        let smoothedVar = pixelVariance(of: smoothedCG)
+        XCTAssertLessThan(smoothedVar, origVar, "Full-resolution saved output must have smoothing applied (lower pixel variance)")
     }
 
     // MARK: - Legacy Pipeline Tests (still valid when flag is false)

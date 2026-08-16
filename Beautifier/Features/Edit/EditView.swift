@@ -3,8 +3,8 @@ import SwiftUI
 struct EditView: View {
     @StateObject private var viewModel: EditViewModel
 
-    init(originalData: Data) {
-        _viewModel = StateObject(wrappedValue: EditViewModel(originalData: originalData))
+    init(originalData: Data, initialAmount: Float = 0.5) {
+        _viewModel = StateObject(wrappedValue: EditViewModel(originalData: originalData, initialAmount: initialAmount))
     }
 
     var body: some View {

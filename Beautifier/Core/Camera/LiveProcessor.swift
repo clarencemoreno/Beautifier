@@ -16,11 +16,14 @@ final class LiveProcessor {
     private var cachedFaceGeometry: FaceGeometry?
     private var lastFaceBox: CGRect?
 
+    private var lastBufferId: ObjectIdentifier?
+    private var lastFrameSequence: UInt64?
+
     var showMaskDebug: Bool = false
 
-    func process(image: CIImage, amount: Float) -> CIImage {
-        // Trigger async inference if 4 frames elapsed and worker is idle
-        triggerAsyncInferenceIfNeeded(for: image)
+    func process(image: CIImage, amount: Float, buffer: CVPixelBuffer? = nil, frameSequence: UInt64? = nil) -> CIImage {
+        // Trigger async inference if 4 distinct frames elapsed and worker is idle
+        triggerAsyncInferenceIfNeeded(for: image, buffer: buffer, frameSequence: frameSequence)
 
         // Read current cached state atomically
         stateLock.lock()
@@ -47,8 +50,32 @@ final class LiveProcessor {
         return SkinSmoothing.apply(to: image, mask: activeMask, radius: radius, amount: amount)
     }
 
-    private func triggerAsyncInferenceIfNeeded(for image: CIImage) {
+    private func triggerAsyncInferenceIfNeeded(for image: CIImage, buffer: CVPixelBuffer?, frameSequence: UInt64?) {
         stateLock.lock()
+
+        // Determine if this is a new camera frame buffer or a duplicate redraw of the same buffer
+        let isNewFrame: Bool
+        if let frameSequence {
+            isNewFrame = (lastFrameSequence == nil || frameSequence != lastFrameSequence)
+            if isNewFrame {
+                lastFrameSequence = frameSequence
+            }
+        } else if let buffer {
+            let bufferId = ObjectIdentifier(buffer)
+            isNewFrame = (lastBufferId == nil || bufferId != lastBufferId)
+            if isNewFrame {
+                lastBufferId = bufferId
+            }
+        } else {
+            // Default to true when called directly with CIImage (e.g. tests)
+            isNewFrame = true
+        }
+
+        guard isNewFrame else {
+            stateLock.unlock()
+            return
+        }
+
         frameCount += 1
         let currentFrame = frameCount
         let framesSinceLastInference = currentFrame - lastInferenceFrame
@@ -120,6 +147,8 @@ final class LiveProcessor {
         cachedMask = nil
         cachedFaceGeometry = nil
         lastFaceBox = nil
+        lastBufferId = nil
+        lastFrameSequence = nil
         stateLock.unlock()
     }
 }

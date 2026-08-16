@@ -29,7 +29,7 @@ struct CameraView: View {
             }
             .navigationDestination(isPresented: $isNavigatingToEdit) {
                 if let data = capturedImageData {
-                    EditView(originalData: data)
+                    EditView(originalData: data, initialAmount: amount)
                 }
             }
             .navigationBarHidden(true)

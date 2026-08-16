@@ -7,6 +7,7 @@ final class CameraService: NSObject, ObservableObject {
     @Published var isAuthorized: Bool = false
     @Published var authorizationDenied: Bool = false
     @Published var latestPixelBuffer: CVPixelBuffer?
+    @Published private(set) var isRunning: Bool = false
 
     private let session = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
@@ -225,6 +226,7 @@ final class CameraService: NSObject, ObservableObject {
         #if targetEnvironment(simulator)
         DispatchQueue.main.async {
             self.stopSimulatorFeed()
+            self.isRunning = true
             self.frameIndex = 0
             self.simulatorTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
                 guard let self else { return }
@@ -240,6 +242,9 @@ final class CameraService: NSObject, ObservableObject {
             self.configureSessionIfNeeded()
             if !self.session.isRunning {
                 self.session.startRunning()
+                DispatchQueue.main.async {
+                    self.isRunning = self.session.isRunning
+                }
             }
         }
         #endif
@@ -254,6 +259,9 @@ final class CameraService: NSObject, ObservableObject {
         sessionQueue.async {
             if self.session.isRunning {
                 self.session.stopRunning()
+                DispatchQueue.main.async {
+                    self.isRunning = self.session.isRunning
+                }
             }
         }
         #endif
@@ -263,6 +271,7 @@ final class CameraService: NSObject, ObservableObject {
     private func stopSimulatorFeed() {
         simulatorTimer?.invalidate()
         simulatorTimer = nil
+        isRunning = false
     }
     #endif
 
