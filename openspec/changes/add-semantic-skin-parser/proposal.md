@@ -1,5 +1,10 @@
 # Change: Replace Heuristic Masks with Semantic Face Parsing (Week 3.5)
 
+> **STATUS: ACTIVE — next change to implement.**
+> **SUPERSEDES:** `add-ml-skin-parser` (v0.3.0-week3, regressed).
+> **ON COMPLETION:** tag `v0.3.5-semantic-parser`; move this folder and
+> `add-ml-skin-parser` to `openspec/changes/archive/`; update STATUS.md.
+
 ## Why
 
 v0.3.0 shipped a regression. `VNGeneratePersonSegmentationRequest` segments
