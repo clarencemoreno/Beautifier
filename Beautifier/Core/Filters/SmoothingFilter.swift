@@ -12,7 +12,7 @@ enum SmoothingFilter {
     static func apply(to ciImage: CIImage, radius: CGFloat = 20.0, amount: Float) -> CIImage {
         guard amount > 0 else { return ciImage }
 
-        let effectiveRadius = max(4.0, radius * CGFloat(amount))
+        let effectiveRadius = max(1.0, radius * CGFloat(amount))
 
         let blurred = ciImage
             .clampedToExtent()

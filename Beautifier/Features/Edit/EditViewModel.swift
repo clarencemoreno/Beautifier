@@ -33,47 +33,53 @@ final class EditViewModel: ObservableObject {
 
             if let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) {
                 previewImage = UIImage(cgImage: previewCG)
+                isDetectingFace = true
 
                 Task.detached(priority: .userInitiated) {
-                    let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent)
-
-                    await MainActor.run {
-                        self.faceGeometry = nil
-                        self.faceSegmentationMask = nil
-                        self.noFaceDetected = true
-                        self.isDetectingFace = false
-
-                        guard let previewCG else {
+                    guard let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) else {
+                        await MainActor.run {
+                            self.faceGeometry = nil
+                            self.faceSegmentationMask = nil
+                            self.previewMask = nil
+                            self.noFaceDetected = true
+                            self.isDetectingFace = false
                             self.renderPreview()
-                            return
+                        }
+                        return
+                    }
+
+                    if FeatureFlags.semanticSkinParser {
+                        // ——— New pipeline: BiSeNet semantic skin parser (runs in background) ———
+                        let geometry = FaceDetector.detectGeometry(in: previewCG)
+                        let aiMask = (geometry != nil) ? SkinParserML.skinMask(for: previewCG) : nil
+                        let mask = aiMask.map { SkinMaskBuilder.buildMask(for: previewCI, skinMask: $0) }
+
+                        await MainActor.run {
+                            self.faceGeometry = geometry
+                            self.previewMask = mask
+                            self.noFaceDetected = (geometry == nil)
+                            self.isDetectingFace = false
+                            self.renderPreview()
+                        }
+                    } else {
+                        // ——— Legacy pipeline: person segmentation + ellipse fallback ———
+                        let geometry = FaceDetector.detectGeometry(in: previewCG)
+                        let aiMask = FaceSegmenter.segmentFace(in: previewCG)
+                        let mask: CIImage?
+                        if let geometry, let aiMask {
+                            mask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry, faceMask: aiMask)
+                        } else {
+                            mask = nil
                         }
 
-                        if FeatureFlags.semanticSkinParser {
-                            // ——— New pipeline: BiSeNet semantic skin parser ———
-                            let aiMask = SkinParserML.skinMask(for: previewCG)
-                            if let aiMask = aiMask {
-                                self.noFaceDetected = (self._maskMeanLuminance(aiMask) < 0.01)
-                                self.previewMask = SkinMaskBuilder.buildMask(for: previewCI, skinMask: aiMask)
-                            } else {
-                                self.noFaceDetected = true
-                                self.previewMask = nil
-                            }
-                        } else {
-                            // ——— Legacy pipeline: person segmentation + ellipse fallback ———
-                            let geometry = FaceDetector.detectGeometry(in: previewCG)
-                            let aiMask = FaceSegmenter.segmentFace(in: previewCG)
-
+                        await MainActor.run {
                             self.faceGeometry = geometry
                             self.faceSegmentationMask = aiMask
+                            self.previewMask = mask
                             self.noFaceDetected = (geometry == nil)
-
-                            if let geometry = geometry, let aiMask = aiMask {
-                                self.previewMask = SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry, faceMask: aiMask)
-                            } else {
-                                self.previewMask = nil
-                            }
+                            self.isDetectingFace = false
+                            self.renderPreview()
                         }
-                        self.renderPreview()
                     }
                 }
             } else {
@@ -103,9 +109,11 @@ final class EditViewModel: ObservableObject {
         } else if isDetectingFace {
             output = previewCI
         } else if FeatureFlags.semanticSkinParser, let previewMask {
-            // New pipeline: use previewMask directly (no faceGeometry needed)
-            let maxRadius = 15.0 * previewCI.extent.width / 2048.0
-            let radius = min(max(4.0 * previewCI.extent.width / 2048.0, 4.0), maxRadius)
+            // Semantic skin parser pipeline: smooth skin area with scaled radius
+            let scale = previewCI.extent.width / 2048.0
+            let faceWidthRatio = faceGeometry?.faceBox.width ?? 0.5
+            let baseRadius = max(8.0, faceWidthRatio * previewCI.extent.width * 0.05)
+            let radius = min(max(baseRadius, 6.0 * scale), 24.0 * scale)
             output = SkinSmoothing.apply(to: previewCI, mask: previewMask, radius: radius, amount: amount)
         } else if let faceGeometry, let previewMask {
             // Legacy pipeline: needs faceGeometry for radius sizing
@@ -118,28 +126,6 @@ final class EditViewModel: ObservableObject {
         guard let output, !Task.isCancelled else { return }
         guard let cgImage = RenderContext.shared.createCGImage(output, from: output.extent) else { return }
         previewImage = UIImage(cgImage: cgImage)
-    }
-
-    /// Returns the mean luminance of a mask CIImage (0 = no skin, ~1 = full skin).
-    private func _maskMeanLuminance(_ mask: CIImage) -> Double {
-        guard let cg = RenderContext.shared.createCGImage(mask, from: mask.extent) else { return 0 }
-        let w = cg.width, h = cg.height
-        guard let ctx = CGContext(data: nil, width: w, height: h,
-                                   bitsPerComponent: 8, bytesPerRow: w * 4,
-                                   space: CGColorSpaceCreateDeviceRGB(),
-                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        guard let data = ctx.data else { return 0 }
-        let ptr = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
-        var total: Double = 0
-        let pixelCount = w * h
-        for i in 0..<pixelCount {
-            let r = Double(ptr[i * 4])
-            let g = Double(ptr[i * 4 + 1])
-            let b = Double(ptr[i * 4 + 2])
-            total += (r + g + b) / (3.0 * 255.0)
-        }
-        return total / Double(pixelCount)
     }
 
     func save() async {
@@ -156,6 +142,7 @@ final class EditViewModel: ObservableObject {
             if FeatureFlags.semanticSkinParser {
                 // New pipeline: BiSeNet semantic skin parser at full resolution
                 guard let fullCG = normalizedImage.cgImage,
+                      let faceGeometry = FaceDetector.detectGeometry(in: fullCG),
                       let aiMask = SkinParserML.skinMask(for: fullCG) else {
                     output = SmoothingFilter.apply(to: ciImage, radius: 24, amount: amount)
                     let result = try ImageLoader.renderUIImage(from: output, scale: normalizedImage.scale)
@@ -164,8 +151,10 @@ final class EditViewModel: ObservableObject {
                     return
                 }
                 let fullMask = SkinMaskBuilder.buildMask(for: ciImage, skinMask: aiMask)
-                let maxRadius = 15.0 * ciImage.extent.width / 2048.0
-                let radius = min(max(4.0 * ciImage.extent.width / 2048.0, 4.0), maxRadius)
+                let scale = ciImage.extent.width / 2048.0
+                let faceWidthRatio = faceGeometry.faceBox.width
+                let baseRadius = max(8.0, faceWidthRatio * ciImage.extent.width * 0.05)
+                let radius = min(max(baseRadius, 6.0 * scale), 24.0 * scale)
                 output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: radius, amount: amount)
             } else {
                 // Legacy pipeline: person segmentation + ellipse fallback
