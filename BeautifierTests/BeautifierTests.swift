@@ -73,6 +73,50 @@ final class BeautifierPipelineTests: XCTestCase {
         }
     }
 
+    /// Detailed verification of the full smoothing pipeline on a real face photo
+    func testInspectRenderPipeline() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 2048)
+        guard let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) else {
+            XCTFail("Failed to create previewCG")
+            return
+        }
+
+        guard let aiMask = SkinParserML.skinMask(for: previewCG) else {
+            XCTFail("SkinParserML returned nil")
+            return
+        }
+
+        let mask = SkinMaskBuilder.buildMask(for: previewCI, skinMask: aiMask)
+        let smoothed0 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 0.0)
+        let smoothed50 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 0.5)
+        let smoothed100 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 1.0)
+
+        guard let cgOrig = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let cgMask = RenderContext.shared.createCGImage(mask, from: mask.extent),
+              let cgSoft = RenderContext.shared.createCGImage(SmoothingFilter.apply(to: previewCI, radius: 16, amount: 1.0), from: previewCI.extent),
+              let cgSmoothed = RenderContext.shared.createCGImage(smoothed100, from: smoothed100.extent) else {
+            XCTFail("Failed to render CGImages")
+            return
+        }
+
+        print("DEBUG_PIPELINE: previewCI.extent=\(previewCI.extent)")
+        print("DEBUG_PIPELINE: aiMask.extent=\(aiMask.extent)")
+        print("DEBUG_PIPELINE: mask.extent=\(mask.extent)")
+
+        let origVar = pixelVariance(of: cgOrig)
+        let maskBright = averageBrightness(of: cgMask)
+        let softVar = pixelVariance(of: cgSoft)
+        let smoothedVar = pixelVariance(of: cgSmoothed)
+
+        print("DEBUG_PIPELINE: origVar=\(origVar), softVar=\(softVar), maskAvgBrightness=\(maskBright), smoothedVar=\(smoothedVar)")
+        XCTAssertGreaterThan(maskBright, 0.01, "Mask brightness must be non-zero")
+        XCTAssertLessThan(softVar, origVar, "Softened image variance must be lower than original")
+        XCTAssertLessThan(smoothedVar, origVar, "Smoothed image variance must be lower than original")
+    }
+
     // MARK: - Legacy Pipeline Tests (still valid when flag is false)
 
     /// Verify that FaceSegmenter produces a non-nil AI face segmentation mask for a face photo.
