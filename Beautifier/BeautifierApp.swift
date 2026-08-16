@@ -11,7 +11,7 @@ import SwiftUI
 struct BeautifierApp: App {
     var body: some Scene {
         WindowGroup {
-            HomeView()
+            CameraView()
         }
     }
 }

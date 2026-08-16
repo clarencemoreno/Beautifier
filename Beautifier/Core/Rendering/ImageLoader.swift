@@ -54,6 +54,23 @@ enum ImageLoader {
         return CIImage(cgImage: cgImage)
     }
 
+    static func fullResolutionCIImage(from data: Data) throws -> CIImage {
+        let options: [NSString: Any] = [
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 16384,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ]
+
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        else {
+            throw Error.invalidImageData
+        }
+
+        return CIImage(cgImage: cgImage)
+    }
+
     static func renderUIImage(from ciImage: CIImage, scale: CGFloat = 1.0) throws -> UIImage {
         guard let cgImage = RenderContext.shared.createCGImage(ciImage, from: ciImage.extent) else {
             throw ImageLoader.Error.invalidCIImage

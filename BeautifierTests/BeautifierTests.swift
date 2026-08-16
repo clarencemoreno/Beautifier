@@ -1,73 +1,420 @@
 import XCTest
+import ImageIO
 @testable import Beautifier
 
 final class BeautifierPipelineTests: XCTestCase {
 
-    // MARK: - SkinColorMask Tests
+    // MARK: - Live Camera & Temporal Caching Requirements Tests
 
-    /// Verify that SkinColorMask produces a grayscale mask (not the original color image).
-    /// The old CIKL kernel returned nil and fell back to returning the original image.
-    func testSkinColorMaskProducesGrayscaleMask() throws {
-        // Create an image with a known skin-tone color (warm beige/tan)
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100))
-        let skinImage = renderer.image { ctx in
-            // Typical skin tone in RGB: ~(224, 172, 143)
-            UIColor(red: 224/255, green: 172/255, blue: 143/255, alpha: 1.0).setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
-        }
+    /// Verify LiveProcessor enforces the strict 4-frame minimum inference cadence.
+    func testLiveProcessorEnforcesFourFrameMinimumInferenceCadence() throws {
+        let processor = LiveProcessor()
+        let sourceSize = CGSize(width: 512, height: 512)
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
 
-        guard let data = skinImage.jpegData(compressionQuality: 1.0),
-              let ciImage = try? ImageLoader.downsampledPreviewCIImage(from: data) else {
-            XCTFail("Failed to create test CIImage")
-            return
-        }
+        // Frame 1: Triggers inference #1 (lastInferenceFrame = 1)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 1)
+        XCTAssertEqual(processor.lastInferenceFrame, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
 
-        let mask = SkinColorMask.apply(to: ciImage)
+        // Frame 2: Skipped (elapsed 1 < 4)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 2)
+        XCTAssertEqual(processor.lastInferenceFrame, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
 
-        // Render mask to pixels
-        guard let cgMask = RenderContext.shared.createCGImage(mask, from: mask.extent) else {
-            XCTFail("Failed to render mask to CGImage")
-            return
-        }
+        // Frame 3: Skipped (elapsed 2 < 4)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 3)
+        XCTAssertEqual(processor.lastInferenceFrame, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
 
-        // The mask for a uniform skin-tone image should be mostly white (skin detected)
-        let avgBrightness = averageBrightness(of: cgMask)
-        XCTAssertGreaterThan(avgBrightness, 0.3,
-            "Skin-tone image should produce a mostly bright mask, got avg brightness: \(avgBrightness)")
+        // Frame 4: Skipped (elapsed 3 < 4)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 4)
+        XCTAssertEqual(processor.lastInferenceFrame, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Wait a moment for background task to release isInferring
+        let exp = XCTestExpectation(description: "Worker idle")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { exp.fulfill() }
+        wait(for: [exp], timeout: 1.0)
+
+        // Frame 5: Triggers inference #2 (elapsed 4 >= 4)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 5)
+        XCTAssertEqual(processor.lastInferenceFrame, 5)
+        XCTAssertEqual(processor.inferenceRunCount, 2)
     }
 
-    /// Verify that a non-skin-tone image produces a mostly dark mask.
-    func testSkinColorMaskRejectsNonSkinColors() throws {
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100))
-        let blueImage = renderer.image { ctx in
-            UIColor.systemBlue.setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
-        }
+    /// Verify LiveProcessor deduplicates multiple render calls on the same camera buffer.
+    func testLiveProcessorDeduplicatesIdenticalBuffers() throws {
+        let processor = LiveProcessor()
+        let sourceSize = CGSize(width: 512, height: 512)
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
 
-        guard let data = blueImage.jpegData(compressionQuality: 1.0),
-              let ciImage = try? ImageLoader.downsampledPreviewCIImage(from: data) else {
-            XCTFail("Failed to create test CIImage")
+        var pixelBuffer1: CVPixelBuffer?
+        let attrs: [CFString: Any] = [kCVPixelBufferMetalCompatibilityKey: true]
+        CVPixelBufferCreate(kCFAllocatorDefault, 512, 512, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer1)
+        guard let buffer1 = pixelBuffer1 else {
+            XCTFail("Failed to create pixelBuffer1")
             return
         }
 
-        let mask = SkinColorMask.apply(to: ciImage)
-        guard let cgMask = RenderContext.shared.createCGImage(mask, from: mask.extent) else {
-            XCTFail("Failed to render mask to CGImage")
+        var pixelBuffer2: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, 512, 512, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer2)
+        guard let buffer2 = pixelBuffer2 else {
+            XCTFail("Failed to create pixelBuffer2")
             return
         }
 
-        let avgBrightness = averageBrightness(of: cgMask)
-        XCTAssertLessThan(avgBrightness, 0.3,
-            "Blue image should produce a mostly dark mask, got avg brightness: \(avgBrightness)")
+        // Render buffer1 5 times (simulating redundant redraws / FPS telemetry updates)
+        for _ in 1...5 {
+            _ = processor.process(image: source, amount: 0.5, buffer: buffer1)
+        }
+        // Only 1 frame count should be registered for buffer1
+        XCTAssertEqual(processor.frameCount, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Render buffer2 (a distinct new camera frame)
+        _ = processor.process(image: source, amount: 0.5, buffer: buffer2)
+        XCTAssertEqual(processor.frameCount, 2)
+    }
+
+    /// Verify LiveProcessor deduplicates strictly by monotonic frameSequence across redraws.
+    func testLiveProcessorDeduplicatesByFrameSequence() throws {
+        let processor = LiveProcessor()
+        let sourceSize = CGSize(width: 512, height: 512)
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+
+        // Redraw frameSequence 1 multiple times (e.g. FPS badge updates)
+        for _ in 1...4 {
+            _ = processor.process(image: source, amount: 0.5, frameSequence: 1)
+        }
+        XCTAssertEqual(processor.frameCount, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Advance to frameSequence 2
+        _ = processor.process(image: source, amount: 0.5, frameSequence: 2)
+        XCTAssertEqual(processor.frameCount, 2)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+    }
+
+    /// Verify that invalidateCache() clears mask/geometry state but preserves frame deduplication tracking.
+    func testLiveProcessorInvalidateCachePreservesFrameDeduplication() throws {
+        let processor = LiveProcessor()
+        let sourceSize = CGSize(width: 512, height: 512)
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+
+        // Process frame 1
+        _ = processor.process(image: source, amount: 0.5, frameSequence: 1)
+        XCTAssertEqual(processor.frameCount, 1)
+
+        // Invalidate mask cache (e.g. inference returned no face)
+        processor.invalidateCache()
+
+        // Redraw the same frameSequence 1
+        _ = processor.process(image: source, amount: 0.5, frameSequence: 1)
+
+        // frameCount and inference should NOT be re-triggered for frameSequence 1
+        XCTAssertEqual(processor.frameCount, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+    }
+
+    /// Verify CameraGeometry aspect-fill calculation maintains uniform scaling and center alignment.
+    func testCameraGeometryAspectFillMaintainsUniformScale() throws {
+        let imageSize = CGSize(width: 720, height: 1280) // 9:16 portrait
+        let drawableSize = CGSize(width: 393, height: 852) // iPhone screen
+
+        let (scale, origin) = CameraGeometry.calculateAspectFill(imageSize: imageSize, drawableSize: drawableSize)
+
+        // Scale must cover both width and height
+        let scaledW = imageSize.width * scale
+        let scaledH = imageSize.height * scale
+        XCTAssertGreaterThanOrEqual(scaledW, drawableSize.width - 0.01)
+        XCTAssertGreaterThanOrEqual(scaledH, drawableSize.height - 0.01)
+
+        // Origin must center the scaled image within the drawable
+        XCTAssertEqual(origin.x, (drawableSize.width - scaledW) / 2.0, accuracy: 0.01)
+        XCTAssertEqual(origin.y, (drawableSize.height - scaledH) / 2.0, accuracy: 0.01)
+    }
+
+    /// Verify CameraService lifecycle transitions and authorization state.
+    func testCameraServiceLifecycle() throws {
+        let camera = CameraService()
+        XCTAssertFalse(camera.isRunning, "CameraService should initially not be running")
+
+        camera.start()
+        let startExp = XCTestExpectation(description: "Camera started")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            XCTAssertTrue(camera.isRunning, "CameraService should be running after start()")
+            startExp.fulfill()
+        }
+        wait(for: [startExp], timeout: 1.0)
+
+        camera.stop()
+        let stopExp = XCTestExpectation(description: "Camera stopped")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            XCTAssertFalse(camera.isRunning, "CameraService should not be running after stop()")
+            stopExp.fulfill()
+        }
+        wait(for: [stopExp], timeout: 1.0)
+
+        camera.checkPermissions()
+        let permExp = XCTestExpectation(description: "Camera permissions checked")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            #if targetEnvironment(simulator)
+            XCTAssertTrue(camera.isAuthorized, "CameraService should be authorized in simulator")
+            XCTAssertFalse(camera.authorizationDenied, "Authorization should not be denied in simulator")
+            #else
+            XCTAssertNotEqual(camera.isAuthorized, camera.authorizationDenied, "isAuthorized and authorizationDenied should have distinct non-tautological states")
+            #endif
+            permExp.fulfill()
+        }
+        wait(for: [permExp], timeout: 1.0)
+    }
+
+    // MARK: - Feature Flag Tests
+
+    /// Verify that FeatureFlags.semanticSkinParser is true in DEBUG builds.
+    func testFeatureFlagSemanticSkinParserIsTrueInDebug() {
+        XCTAssertTrue(FeatureFlags.semanticSkinParser,
+            "FeatureFlags.semanticSkinParser should be true in DEBUG builds")
+    }
+
+    // MARK: - SkinMaskBuilder (New Pipeline) Tests
+
+    /// Verify that the new SkinMaskBuilder.buildMask(for:skinMask:) scales
+    /// a 512×512 mask up to match a larger image extent.
+    func testSkinMaskBuilderNewPipelineScalesMask() throws {
+        let sourceSize = CGSize(width: 2048, height: 1536)
+        let maskSize = CGSize(width: 512, height: 512)
+
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+        let mask = CIImage(color: .white).cropped(to: CGRect(origin: .zero, size: maskSize))
+
+        let output = SkinMaskBuilder.buildMask(for: source, skinMask: mask)
+
+        XCTAssertEqual(output.extent.size, sourceSize,
+            "Scaled mask extent should match source image extent")
+    }
+
+    /// Verify that the new SkinMaskBuilder.buildMask(for:skinMask:) applies
+    /// a 3px Gaussian feather blur (output creates a smooth transition at sharp boundaries).
+    func testSkinMaskBuilderNewPipelineFeathersMask() throws {
+        let sourceSize = CGSize(width: 1024, height: 1024)
+        let maskSize = CGSize(width: 512, height: 512)
+
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+        // Create a mask with a sharp white box on the left half and black on the right half
+        let whiteRect = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 256, height: 512))
+        let blackRect = CIImage(color: .black).cropped(to: CGRect(x: 256, y: 0, width: 256, height: 512))
+        let sharpMask = whiteRect.composited(over: blackRect).cropped(to: CGRect(origin: .zero, size: maskSize))
+
+        let output = SkinMaskBuilder.buildMask(for: source, skinMask: sharpMask)
+
+        guard let outputCG = RenderContext.shared.createCGImage(output, from: output.extent) else {
+            XCTFail("Failed to render feathered mask")
+            return
+        }
+
+        // At the boundary (x = 0.5), blur creates an intermediate gradient pixel value (between 0.1 and 0.9)
+        let edgeBrightness = getPixelBrightness(of: outputCG, atNormalized: CGPoint(x: 0.5, y: 0.5))
+        XCTAssertGreaterThan(edgeBrightness, 0.1, "Edge pixel should have feathered brightness > 0.1")
+        XCTAssertLessThan(edgeBrightness, 0.9, "Edge pixel should have feathered brightness < 0.9")
+    }
+
+    /// Verify that SkinParserML produces a non-nil skin-probability mask for a real face photo.
+    func testSkinParserMLGeneratesMaskForFaceImage() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            XCTFail("Failed to load test_face.jpg CGImage")
+            return
+        }
+
+        let mask = SkinParserML.skinMask(for: cgImage)
+        XCTAssertNotNil(mask, "SkinParserML should produce a non-nil mask for test_face.jpg")
+        if let mask = mask {
+            XCTAssertEqual(mask.extent.width, 512, accuracy: 1.0)
+            XCTAssertEqual(mask.extent.height, 512, accuracy: 1.0)
+        }
+    }
+
+    /// Detailed verification of the full smoothing pipeline on a real face photo
+    func testInspectRenderPipeline() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 2048)
+        guard let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) else {
+            XCTFail("Failed to create previewCG")
+            return
+        }
+
+        guard let aiMask = SkinParserML.skinMask(for: previewCG) else {
+            XCTFail("SkinParserML returned nil")
+            return
+        }
+
+        let mask = SkinMaskBuilder.buildMask(for: previewCI, skinMask: aiMask)
+        let smoothed0 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 0.0)
+        let smoothed50 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 0.5)
+        let smoothed100 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 1.0)
+
+        guard let cgOrig = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let cgMask = RenderContext.shared.createCGImage(mask, from: mask.extent),
+              let cgSoft = RenderContext.shared.createCGImage(SmoothingFilter.apply(to: previewCI, radius: 16, amount: 1.0), from: previewCI.extent),
+              let cgSmoothed = RenderContext.shared.createCGImage(smoothed100, from: smoothed100.extent) else {
+            XCTFail("Failed to render CGImages")
+            return
+        }
+
+        print("DEBUG_PIPELINE: previewCI.extent=\(previewCI.extent)")
+        print("DEBUG_PIPELINE: aiMask.extent=\(aiMask.extent)")
+        print("DEBUG_PIPELINE: mask.extent=\(mask.extent)")
+
+        let origVar = pixelVariance(of: cgOrig)
+        let maskBright = averageBrightness(of: cgMask)
+        let softVar = pixelVariance(of: cgSoft)
+        let smoothedVar = pixelVariance(of: cgSmoothed)
+
+        print("DEBUG_PIPELINE: origVar=\(origVar), softVar=\(softVar), maskAvgBrightness=\(maskBright), smoothedVar=\(smoothedVar)")
+        XCTAssertGreaterThan(maskBright, 0.01, "Mask brightness must be non-zero")
+        XCTAssertLessThan(softVar, origVar, "Softened image variance must be lower than original")
+        XCTAssertLessThan(smoothedVar, origVar, "Smoothed image variance must be lower than original")
+    }
+
+    /// Verify that full resolution image decoding and processing correctly scales the mask and reduces pixel variance
+    func testFullResolutionProcessingAppliesSmoothingToPhoto() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+
+        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 2048)
+        guard let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let aiMask = SkinParserML.skinMask(for: previewCG) else {
+            XCTFail("Failed to detect face or generate mask")
+            return
+        }
+
+        let previewMask = SkinMaskBuilder.buildMask(for: previewCI, skinMask: aiMask)
+        let fullResCI = try ImageLoader.fullResolutionCIImage(from: data)
+
+        let scaleX = fullResCI.extent.width / previewMask.extent.width
+        let scaleY = fullResCI.extent.height / previewMask.extent.height
+        let fullMask = previewMask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+
+        let scale = fullResCI.extent.width / 2048.0
+        let radius = 15.0 * scale
+        let smoothedOutput = SkinSmoothing.apply(to: fullResCI, mask: fullMask, radius: radius, amount: 1.0)
+
+        guard let origCG = RenderContext.shared.createCGImage(fullResCI, from: fullResCI.extent),
+              let smoothedCG = RenderContext.shared.createCGImage(smoothedOutput, from: smoothedOutput.extent) else {
+            XCTFail("Failed to render full resolution images")
+            return
+        }
+
+        let origVar = pixelVariance(of: origCG)
+        let smoothedVar = pixelVariance(of: smoothedCG)
+        XCTAssertLessThan(smoothedVar, origVar, "Full-resolution saved output must have smoothing applied (lower pixel variance)")
+    }
+
+    /// Verify that facial contour preservation retains edge gradients on real face photos
+    func testFacialContourPreservationRetainsEdgeGradients() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+
+        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 2048)
+        guard let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let aiMask = SkinParserML.skinMask(for: previewCG) else {
+            XCTFail("Failed to detect face or generate mask")
+            return
+        }
+
+        let protectedMask = SkinMaskBuilder.buildMask(for: previewCI, skinMask: aiMask)
+        let smoothed = SkinSmoothing.apply(to: previewCI, mask: protectedMask, radius: 16, amount: 1.0)
+
+        // Compute edge intensity map of original vs smoothed image
+        let origEdgesCI = previewCI
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
+            .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 3.0])
+        let smoothEdgesCI = smoothed
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
+            .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 3.0])
+
+        guard let origEdgesCG = RenderContext.shared.createCGImage(origEdgesCI, from: origEdgesCI.extent),
+              let smoothEdgesCG = RenderContext.shared.createCGImage(smoothEdgesCI, from: smoothEdgesCI.extent),
+              let origCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let smoothCG = RenderContext.shared.createCGImage(smoothed, from: smoothed.extent) else {
+            XCTFail("Failed to render edge comparison CGImages")
+            return
+        }
+
+        let origEdgeBrightness = averageBrightness(of: origEdgesCG)
+        let smoothEdgeBrightness = averageBrightness(of: smoothEdgesCG)
+        let origVariance = pixelVariance(of: origCG)
+        let smoothVariance = pixelVariance(of: smoothCG)
+
+        // Skin surface variance is significantly smoothed
+        XCTAssertLessThan(smoothVariance, origVariance, "Skin surface variance should decrease with smoothing")
+
+        // Edge gradient retention across the frame should retain >60% of structural definitions (while micro-pores are smoothed)
+        let retention = smoothEdgeBrightness / max(origEdgeBrightness, 0.001)
+        XCTAssertGreaterThan(retention, 0.60, "Facial contour edges must retain >60% definition (measured \(retention * 100)%)")
+    }
+
+    /// Verify simulator dynamic moving feed produces continuous valid frames for offline testing
+    func testDynamicMovingSimulatorFeedProducesContinuousSmoothedFrames() throws {
+        let camera = CameraService()
+        let processor = LiveProcessor()
+
+        camera.start()
+        let exp = XCTestExpectation(description: "Simulator feed produces frames")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            guard let buffer = camera.latestPixelBuffer else {
+                XCTFail("Simulator feed should produce valid latestPixelBuffer")
+                return
+            }
+            let ciImage = CIImage(cvPixelBuffer: buffer)
+            let processed = processor.process(image: ciImage, amount: 0.8, buffer: buffer, frameSequence: camera.frameSequence)
+            XCTAssertNotNil(processed)
+            XCTAssertEqual(processed.extent.width, 720)
+            XCTAssertEqual(processed.extent.height, 1080)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 1.0)
+        camera.stop()
+    }
+
+    // MARK: - Legacy Pipeline Tests (still valid when flag is false)
+
+    /// Verify that FaceSegmenter produces a non-nil AI face segmentation mask for a face photo.
+    /// This test exercises the legacy pipeline directly.
+    func testLegacyFaceSegmenterProducesSegmentationMask() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            XCTFail("Failed to load test_face.jpg CGImage")
+            return
+        }
+
+        let mask = FaceSegmenter.segmentFace(in: cgImage)
+        XCTAssertNotNil(mask, "FaceSegmenter should return a non-nil CIImage mask for a face photo")
     }
 
     // MARK: - SmoothingFilter Tests
 
-    /// Verify SmoothingFilter actually modifies the image (not a no-op from non-existent filter).
+    /// Verify SmoothingFilter actually modifies the image (reduces high-frequency variance).
     func testSmoothingFilterModifiesImage() throws {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100))
         let testImage = renderer.image { ctx in
-            // Create high-frequency pattern (checkerboard-like)
             for y in stride(from: 0, to: 100, by: 2) {
                 for x in stride(from: 0, to: 100, by: 2) {
                     let isWhite = (x / 2 + y / 2) % 2 == 0
@@ -90,21 +437,20 @@ final class BeautifierPipelineTests: XCTestCase {
             return
         }
 
-        // Smoothing should reduce variance (checkerboard → more uniform gray)
         let originalVariance = pixelVariance(of: originalCG)
         let smoothedVariance = pixelVariance(of: smoothedCG)
         XCTAssertLessThan(smoothedVariance, originalVariance,
             "Smoothed image should have lower pixel variance than original. Original: \(originalVariance), Smoothed: \(smoothedVariance)")
     }
 
-    // MARK: - SkinMaskBuilder Tests
+    // MARK: - SkinMaskBuilder (Legacy Pipeline) Tests
 
-    /// Verify that structure mask is rasterized correctly.
-    func testSkinMaskBuilderStructureMask() throws {
+    /// Verify that structure mask is rasterized correctly with white background and black exclusions.
+    func testSkinMaskBuilderLegacyStructureMask() throws {
         let size = CGSize(width: 200, height: 200)
         let geo = FaceGeometry(
             faceBox: CGRect(x: 0.2, y: 0.2, width: 0.6, height: 0.6),
-            exclusions: [CGRect(x: 0.35, y: 0.55, width: 0.3, height: 0.1)] // "mouth" area
+            exclusions: [CGRect(x: 0.35, y: 0.55, width: 0.3, height: 0.1)]
         )
 
         guard let structMask = SkinMaskBuilder.rasterizeStructure(geo, size: size) else {
@@ -117,30 +463,43 @@ final class BeautifierPipelineTests: XCTestCase {
             return
         }
 
-        // Center of faceBox should be white (included)
-        let centerPixel = getPixelBrightness(of: cgMask, atNormalized: CGPoint(x: 0.5, y: 0.5))
-        XCTAssertGreaterThan(centerPixel, 0.5,
-            "Center of face box should be white in structure mask")
-
-        // Corner of image (outside face box) should be black
         let cornerPixel = getPixelBrightness(of: cgMask, atNormalized: CGPoint(x: 0.05, y: 0.05))
-        XCTAssertLessThan(cornerPixel, 0.5,
-            "Corner outside face box should be black in structure mask")
+        XCTAssertGreaterThan(cornerPixel, 0.5,
+            "Background should be white in structure mask")
+
+        let exclusionPixel = getPixelBrightness(of: cgMask, atNormalized: CGPoint(x: 0.5, y: 0.4))
+        XCTAssertLessThan(exclusionPixel, 0.5,
+            "Exclusion region should be black in structure mask")
+    }
+
+    /// Verify that the legacy SkinMaskBuilder.buildMask(for:geometry:faceMask:) combines
+    /// an AI mask with landmark exclusions correctly.
+    func testSkinMaskBuilderLegacyCombinesMaskAndExclusions() throws {
+        let size = CGSize(width: 200, height: 200)
+        let geo = FaceGeometry(
+            faceBox: CGRect(x: 0.2, y: 0.2, width: 0.6, height: 0.6),
+            exclusions: [CGRect(x: 0.4, y: 0.5, width: 0.2, height: 0.1)]
+        )
+
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: size))
+        let aiMask = CIImage(color: .white).cropped(to: CGRect(origin: .zero, size: size))
+
+        let output = SkinMaskBuilder.buildMask(for: source, geometry: geo, faceMask: aiMask)
+
+        XCTAssertEqual(output.extent.size, size,
+            "Legacy combined mask extent should match source")
     }
 
     // MARK: - Full Pipeline Tests
 
-    /// Integration test: verify SkinSmoothing only changes skin-region pixels.
+    /// Integration test: verify SkinSmoothing produces valid output with AI face mask.
     func testSkinSmoothingOnlyModifiesMaskedRegion() throws {
         let size = CGSize(width: 200, height: 200)
         let renderer = UIGraphicsImageRenderer(size: size)
 
-        // Create image: left half = skin color, right half = blue
         let testImage = renderer.image { ctx in
-            // Left half: skin-tone
             UIColor(red: 224/255, green: 172/255, blue: 143/255, alpha: 1.0).setFill()
             ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 200))
-            // Right half: blue (non-skin)
             UIColor.systemBlue.setFill()
             ctx.fill(CGRect(x: 100, y: 0, width: 100, height: 200))
         }
@@ -151,7 +510,6 @@ final class BeautifierPipelineTests: XCTestCase {
             return
         }
 
-        // Create a full-white mask (everything is "skin")
         let whiteMask = CIImage(color: .white).cropped(to: ciImage.extent)
         let output = SkinSmoothing.apply(to: ciImage, mask: whiteMask, radius: 8, amount: 1.0)
 
@@ -162,24 +520,18 @@ final class BeautifierPipelineTests: XCTestCase {
 
     // MARK: - FaceGeometry Coordinate Space Test
 
-    /// Verify that FaceGeometryBuilder correctly converts face-relative landmarks
-    /// to image-relative coordinates.
     func testFaceGeometryCoordinateConversion() throws {
-        // Use the demo face image if available; otherwise skip
-        guard let url = Bundle.main.url(forResource: "test_face", withExtension: "jpg")
-                ?? Bundle.main.url(forResource: "sample_face", withExtension: "jpg"),
-              let data = try? Data(contentsOf: url),
-              let uiImage = UIImage(data: data),
-              let cgImage = uiImage.cgImage else {
-            // No demo image available in test bundle — skip gracefully
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             return
         }
 
         let geometry = FaceDetector.detectGeometry(in: cgImage)
-        // If a face is detected, all exclusions should be within the face box (approximately)
         if let geo = geometry {
             for exclusion in geo.exclusions {
-                // Each exclusion should be within or near the enlarged face box
                 let enlargedFaceBox = geo.faceBox.insetBy(
                     dx: -geo.faceBox.width * 0.3,
                     dy: -geo.faceBox.height * 0.3

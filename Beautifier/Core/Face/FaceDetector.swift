@@ -4,13 +4,25 @@ import UIKit
 
 enum FaceDetector {
     static func detectGeometry(in cgImage: CGImage, orientation: CGImagePropertyOrientation = .up) -> FaceGeometry? {
-        let request = VNDetectFaceLandmarksRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
-        try? handler.perform([request])
-        // pick the LARGEST face by bounding-box area
-        guard let best = request.results?
-            .max(by: { area($0) < area($1) }) else { return nil }
-        return FaceGeometryBuilder.build(from: best)
+
+        let landmarksRequest = VNDetectFaceLandmarksRequest()
+        try? handler.perform([landmarksRequest])
+
+        if let best = landmarksRequest.results?.max(by: { area($0) < area($1) }),
+           let geometry = FaceGeometryBuilder.build(from: best) {
+            return geometry
+        }
+
+        let rectsRequest = VNDetectFaceRectanglesRequest()
+        try? handler.perform([rectsRequest])
+
+        if let bestRect = rectsRequest.results?.max(by: { area($0) < area($1) }),
+           let geometry = FaceGeometryBuilder.build(from: bestRect) {
+            return geometry
+        }
+
+        return nil
     }
 
     private static func area(_ f: VNFaceObservation) -> CGFloat {
