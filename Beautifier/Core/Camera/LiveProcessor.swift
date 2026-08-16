@@ -147,8 +147,6 @@ final class LiveProcessor {
         cachedMask = nil
         cachedFaceGeometry = nil
         lastFaceBox = nil
-        lastBufferId = nil
-        lastFrameSequence = nil
         stateLock.unlock()
     }
 }

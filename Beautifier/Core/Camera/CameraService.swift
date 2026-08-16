@@ -7,6 +7,7 @@ final class CameraService: NSObject, ObservableObject {
     @Published var isAuthorized: Bool = false
     @Published var authorizationDenied: Bool = false
     @Published var latestPixelBuffer: CVPixelBuffer?
+    @Published var frameSequence: UInt64 = 0
     @Published private(set) var isRunning: Bool = false
 
     private let session = AVCaptureSession()
@@ -233,6 +234,7 @@ final class CameraService: NSObject, ObservableObject {
                 self.frameIndex += (1.0 / 30.0)
                 if let buffer = self.generateDynamicFrame(time: self.frameIndex) {
                     self.latestPixelBuffer = buffer
+                    self.frameSequence &+= 1
                 }
             }
         }
@@ -304,6 +306,7 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         DispatchQueue.main.async {
             self.latestPixelBuffer = pixelBuffer
+            self.frameSequence &+= 1
         }
     }
 }

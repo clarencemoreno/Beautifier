@@ -54,6 +54,7 @@ struct CameraView: View {
     private var cameraPreview: some View {
         MetalView(
             pixelBuffer: camera.latestPixelBuffer,
+            frameSequence: camera.frameSequence,
             amount: amount,
             processor: processor,
             onFPSUpdate: { fps in

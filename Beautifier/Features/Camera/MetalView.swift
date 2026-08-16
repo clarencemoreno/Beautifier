@@ -4,6 +4,7 @@ import CoreImage
 
 struct MetalView: UIViewRepresentable {
     let pixelBuffer: CVPixelBuffer?
+    var frameSequence: UInt64 = 0
     let amount: Float
     let processor: LiveProcessor
     var onFPSUpdate: ((Double) -> Void)? = nil
@@ -22,6 +23,7 @@ struct MetalView: UIViewRepresentable {
 
     func updateUIView(_ uiView: MTKView, context: Context) {
         context.coordinator.currentPixelBuffer = pixelBuffer
+        context.coordinator.currentFrameSequence = frameSequence
         context.coordinator.currentAmount = amount
         context.coordinator.onFPSUpdate = onFPSUpdate
         uiView.setNeedsDisplay()
@@ -33,6 +35,7 @@ struct MetalView: UIViewRepresentable {
 
     final class Coordinator: NSObject, MTKViewDelegate {
         var currentPixelBuffer: CVPixelBuffer?
+        var currentFrameSequence: UInt64 = 0
         var currentAmount: Float = 0.5
         var onFPSUpdate: ((Double) -> Void)?
         weak var mtkView: MTKView?
@@ -69,7 +72,12 @@ struct MetalView: UIViewRepresentable {
             }
 
             let rawCIImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let processedImage = processor.process(image: rawCIImage, amount: currentAmount, buffer: pixelBuffer)
+            let processedImage = processor.process(
+                image: rawCIImage,
+                amount: currentAmount,
+                buffer: pixelBuffer,
+                frameSequence: currentFrameSequence
+            )
 
             let drawableSize = view.drawableSize
             guard drawableSize.width > 0, drawableSize.height > 0 else { return }

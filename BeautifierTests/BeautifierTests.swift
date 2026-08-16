@@ -82,6 +82,46 @@ final class BeautifierPipelineTests: XCTestCase {
         XCTAssertEqual(processor.frameCount, 2)
     }
 
+    /// Verify LiveProcessor deduplicates strictly by monotonic frameSequence across redraws.
+    func testLiveProcessorDeduplicatesByFrameSequence() throws {
+        let processor = LiveProcessor()
+        let sourceSize = CGSize(width: 512, height: 512)
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+
+        // Redraw frameSequence 1 multiple times (e.g. FPS badge updates)
+        for _ in 1...4 {
+            _ = processor.process(image: source, amount: 0.5, frameSequence: 1)
+        }
+        XCTAssertEqual(processor.frameCount, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Advance to frameSequence 2
+        _ = processor.process(image: source, amount: 0.5, frameSequence: 2)
+        XCTAssertEqual(processor.frameCount, 2)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+    }
+
+    /// Verify that invalidateCache() clears mask/geometry state but preserves frame deduplication tracking.
+    func testLiveProcessorInvalidateCachePreservesFrameDeduplication() throws {
+        let processor = LiveProcessor()
+        let sourceSize = CGSize(width: 512, height: 512)
+        let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
+
+        // Process frame 1
+        _ = processor.process(image: source, amount: 0.5, frameSequence: 1)
+        XCTAssertEqual(processor.frameCount, 1)
+
+        // Invalidate mask cache (e.g. inference returned no face)
+        processor.invalidateCache()
+
+        // Redraw the same frameSequence 1
+        _ = processor.process(image: source, amount: 0.5, frameSequence: 1)
+
+        // frameCount and inference should NOT be re-triggered for frameSequence 1
+        XCTAssertEqual(processor.frameCount, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+    }
+
     /// Verify CameraGeometry aspect-fill calculation maintains uniform scaling and center alignment.
     func testCameraGeometryAspectFillMaintainsUniformScale() throws {
         let imageSize = CGSize(width: 720, height: 1280) // 9:16 portrait
