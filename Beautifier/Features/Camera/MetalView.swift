@@ -6,6 +6,7 @@ struct MetalView: UIViewRepresentable {
     let pixelBuffer: CVPixelBuffer?
     let amount: Float
     let processor: LiveProcessor
+    var onFPSUpdate: ((Double) -> Void)? = nil
 
     func makeUIView(context: Context) -> MTKView {
         let mtkView = MTKView()
@@ -22,23 +23,27 @@ struct MetalView: UIViewRepresentable {
     func updateUIView(_ uiView: MTKView, context: Context) {
         context.coordinator.currentPixelBuffer = pixelBuffer
         context.coordinator.currentAmount = amount
+        context.coordinator.onFPSUpdate = onFPSUpdate
         uiView.setNeedsDisplay()
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(processor: processor)
+        Coordinator(processor: processor, onFPSUpdate: onFPSUpdate)
     }
 
     final class Coordinator: NSObject, MTKViewDelegate {
         var currentPixelBuffer: CVPixelBuffer?
         var currentAmount: Float = 0.5
+        var onFPSUpdate: ((Double) -> Void)?
         weak var mtkView: MTKView?
 
         private let processor: LiveProcessor
         private let commandQueue: MTLCommandQueue?
+        private var frameTimestamps: [CFTimeInterval] = []
 
-        init(processor: LiveProcessor) {
+        init(processor: LiveProcessor, onFPSUpdate: ((Double) -> Void)?) {
             self.processor = processor
+            self.onFPSUpdate = onFPSUpdate
             let device = MTLCreateSystemDefaultDevice()
             self.commandQueue = device?.makeCommandQueue()
             super.init()
@@ -54,23 +59,30 @@ struct MetalView: UIViewRepresentable {
                 return
             }
 
+            // Instrumented Rolling FPS calculation
+            let now = CACurrentMediaTime()
+            frameTimestamps.append(now)
+            frameTimestamps = frameTimestamps.filter { now - $0 <= 1.0 }
+            let measuredFPS = Double(frameTimestamps.count)
+            DispatchQueue.main.async {
+                self.onFPSUpdate?(measuredFPS)
+            }
+
             let rawCIImage = CIImage(cvPixelBuffer: pixelBuffer)
             let processedImage = processor.process(image: rawCIImage, amount: currentAmount)
 
             let drawableSize = view.drawableSize
             guard drawableSize.width > 0, drawableSize.height > 0 else { return }
 
-            // Aspect-fill viewport scaling (D6)
-            let scale = max(drawableSize.width / processedImage.extent.width,
-                            drawableSize.height / processedImage.extent.height)
-            let scaledW = processedImage.extent.width * scale
-            let scaledH = processedImage.extent.height * scale
-            let originX = (drawableSize.width - scaledW) / 2.0
-            let originY = (drawableSize.height - scaledH) / 2.0
+            // Aspect-fill viewport scaling using CameraGeometry (D6)
+            let (scale, origin) = CameraGeometry.calculateAspectFill(
+                imageSize: processedImage.extent.size,
+                drawableSize: drawableSize
+            )
 
             let renderImage = processedImage
                 .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                .transformed(by: CGAffineTransform(translationX: originX, y: originY))
+                .transformed(by: CGAffineTransform(translationX: origin.x, y: origin.y))
                 .cropped(to: CGRect(origin: .zero, size: drawableSize))
 
             RenderContext.shared.render(

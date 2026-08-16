@@ -7,6 +7,7 @@ struct CameraView: View {
 
     @State private var amount: Float = 0.5
     @State private var showMaskDebug: Bool = false
+    @State private var measuredFPS: Double = 30.0
     @State private var capturedImageData: Data?
     @State private var isNavigatingToEdit: Bool = false
     @State private var isCapturing: Bool = false
@@ -54,7 +55,10 @@ struct CameraView: View {
         MetalView(
             pixelBuffer: camera.latestPixelBuffer,
             amount: amount,
-            processor: processor
+            processor: processor,
+            onFPSUpdate: { fps in
+                self.measuredFPS = fps
+            }
         )
         .ignoresSafeArea()
         .accessibilityIdentifier("LiveCameraPreview")
@@ -63,12 +67,12 @@ struct CameraView: View {
     private var topOverlay: some View {
         VStack {
             HStack {
-                // Live status badge
+                // Dynamically measured Live FPS telemetry badge
                 HStack(spacing: 6) {
                     Circle()
                         .fill(Color.red)
                         .frame(width: 8, height: 8)
-                    Text("LIVE 30 FPS")
+                    Text("LIVE \(Int(measuredFPS)) FPS")
                         .font(.caption2)
                         .fontWeight(.bold)
                         .foregroundColor(.white)
@@ -77,6 +81,7 @@ struct CameraView: View {
                 .padding(.vertical, 5)
                 .background(.ultraThinMaterial)
                 .cornerRadius(12)
+                .accessibilityIdentifier("LiveFPSBadge")
 
                 Spacer()
 

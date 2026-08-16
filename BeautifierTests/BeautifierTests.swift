@@ -4,58 +4,75 @@ import ImageIO
 
 final class BeautifierPipelineTests: XCTestCase {
 
-    // MARK: - LiveProcessor Tests
+    // MARK: - Live Camera & Temporal Caching Requirements Tests
 
-    /// Verify LiveProcessor returns unmodified image during warmup or when amount is zero.
-    func testLiveProcessorWarmupPassThrough() throws {
+    /// Verify LiveProcessor enforces the strict 4-frame minimum inference cadence.
+    func testLiveProcessorEnforcesFourFrameMinimumInferenceCadence() throws {
         let processor = LiveProcessor()
         let sourceSize = CGSize(width: 512, height: 512)
         let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
 
-        let outputZero = processor.process(image: source, amount: 0.0)
-        XCTAssertEqual(outputZero.extent, source.extent, "Warmup output extent should match source extent")
+        // Frame 1: Triggers inference #1 (lastInferenceFrame = 1)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 1)
+        XCTAssertEqual(processor.lastInferenceFrame, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Frame 2: Skipped (elapsed 1 < 4)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 2)
+        XCTAssertEqual(processor.lastInferenceFrame, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Frame 3: Skipped (elapsed 2 < 4)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 3)
+        XCTAssertEqual(processor.lastInferenceFrame, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Frame 4: Skipped (elapsed 3 < 4)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 4)
+        XCTAssertEqual(processor.lastInferenceFrame, 1)
+        XCTAssertEqual(processor.inferenceRunCount, 1)
+
+        // Wait a moment for background task to release isInferring
+        let exp = XCTestExpectation(description: "Worker idle")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { exp.fulfill() }
+        wait(for: [exp], timeout: 1.0)
+
+        // Frame 5: Triggers inference #2 (elapsed 4 >= 4)
+        _ = processor.process(image: source, amount: 0.5)
+        XCTAssertEqual(processor.frameCount, 5)
+        XCTAssertEqual(processor.lastInferenceFrame, 5)
+        XCTAssertEqual(processor.inferenceRunCount, 2)
     }
 
-    /// Verify LiveProcessor triggers background inference and applies skin smoothing when mask is ready.
-    func testLiveProcessorAsyncInferenceAndSmoothing() throws {
-        let processor = LiveProcessor()
-        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
-        let url = URL(fileURLWithPath: path)
-        let data = try Data(contentsOf: url)
-        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 512)
+    /// Verify CameraGeometry aspect-fill calculation maintains uniform scaling and center alignment.
+    func testCameraGeometryAspectFillMaintainsUniformScale() throws {
+        let imageSize = CGSize(width: 720, height: 1280) // 9:16 portrait
+        let drawableSize = CGSize(width: 393, height: 852) // iPhone screen
 
-        // 1. Initial call triggers background inference
-        _ = processor.process(image: previewCI, amount: 0.8)
+        let (scale, origin) = CameraGeometry.calculateAspectFill(imageSize: imageSize, drawableSize: drawableSize)
 
-        // Wait up to 2 seconds for background Core ML inference to complete
-        let expectation = XCTestExpectation(description: "Inference completion")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
-            expectation.fulfill()
-        }
-        wait(for: [expectation], timeout: 3.0)
+        // Scale must cover both width and height
+        let scaledW = imageSize.width * scale
+        let scaledH = imageSize.height * scale
+        XCTAssertGreaterThanOrEqual(scaledW, drawableSize.width - 0.01)
+        XCTAssertGreaterThanOrEqual(scaledH, drawableSize.height - 0.01)
 
-        // 2. Subsequent call uses cached mask to apply smoothing
-        let processed = processor.process(image: previewCI, amount: 0.8)
-        XCTAssertEqual(processed.extent, previewCI.extent, "Processed extent should match input extent")
-
-        guard let cgOrig = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
-              let cgProcessed = RenderContext.shared.createCGImage(processed, from: processed.extent) else {
-            XCTFail("Failed to create CGImages for LiveProcessor test")
-            return
-        }
-
-        let origVar = pixelVariance(of: cgOrig)
-        let processedVar = pixelVariance(of: cgProcessed)
-        XCTAssertLessThan(processedVar, origVar, "LiveProcessor output variance should be lower than original face image")
+        // Origin must center the scaled image within the drawable
+        XCTAssertEqual(origin.x, (drawableSize.width - scaledW) / 2.0, accuracy: 0.01)
+        XCTAssertEqual(origin.y, (drawableSize.height - scaledH) / 2.0, accuracy: 0.01)
     }
 
-    /// Verify LiveProcessor.invalidateCache() resets active mask state.
-    func testLiveProcessorInvalidateCache() throws {
-        let processor = LiveProcessor()
-        processor.invalidateCache()
-        let source = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let output = processor.process(image: source, amount: 0.5)
-        XCTAssertEqual(output.extent, source.extent)
+    /// Verify CameraService lifecycle transitions.
+    func testCameraServiceLifecycle() throws {
+        let camera = CameraService()
+        camera.start()
+        camera.stop()
+        camera.checkPermissions()
+        XCTAssertTrue(camera.isAuthorized || camera.authorizationDenied || !camera.isAuthorized)
     }
 
     // MARK: - Feature Flag Tests

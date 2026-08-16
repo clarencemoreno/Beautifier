@@ -7,7 +7,11 @@ final class LiveProcessor {
     private let inferenceQueue = DispatchQueue(label: "com.beautifier.inference", qos: .userInitiated)
     private let stateLock = NSLock()
 
-    private var isInferring: Bool = false
+    private(set) var isInferring: Bool = false
+    private(set) var frameCount: Int = 0
+    private(set) var lastInferenceFrame: Int = -4
+    private(set) var inferenceRunCount: Int = 0
+
     private var cachedMask: CIImage?
     private var cachedFaceGeometry: FaceGeometry?
     private var lastFaceBox: CGRect?
@@ -15,7 +19,7 @@ final class LiveProcessor {
     var showMaskDebug: Bool = false
 
     func process(image: CIImage, amount: Float) -> CIImage {
-        // Trigger async inference if worker is idle
+        // Trigger async inference if 4 frames elapsed and worker is idle
         triggerAsyncInferenceIfNeeded(for: image)
 
         // Read current cached state atomically
@@ -45,11 +49,19 @@ final class LiveProcessor {
 
     private func triggerAsyncInferenceIfNeeded(for image: CIImage) {
         stateLock.lock()
-        if isInferring {
+        frameCount += 1
+        let currentFrame = frameCount
+        let framesSinceLastInference = currentFrame - lastInferenceFrame
+
+        // Enforce temporal cadence: at most once every 4 frames AND worker not busy
+        if isInferring || framesSinceLastInference < 4 {
             stateLock.unlock()
             return
         }
+
         isInferring = true
+        lastInferenceFrame = currentFrame
+        inferenceRunCount += 1
         stateLock.unlock()
 
         // Capture frame snapshot for background inference
