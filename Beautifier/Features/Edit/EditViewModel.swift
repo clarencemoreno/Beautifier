@@ -40,28 +40,15 @@ final class EditViewModel: ObservableObject {
                         return
                     }
 
-                    if FeatureFlags.semanticSkinParser {
-                        let geometry = FaceDetector.detectGeometry(in: previewCG)
-                        let aiMask = (geometry != nil) ? SkinParserML.skinMask(for: previewCG) : nil
-                        let mask = aiMask.map { SkinMaskBuilder.buildMask(for: previewCI, skinMask: $0) }
-                        await MainActor.run {
-                            self.faceGeometry = geometry
-                            self.previewMask = mask
-                            self.noFaceDetected = (geometry == nil)
-                            self.isDetectingFace = false
-                            self.renderPreview()
-                        }
-                    } else {
-                        let geometry = FaceDetector.detectGeometry(in: previewCG)
-                        let aiMask = FaceSegmenter.segmentFace(in: previewCG)
-                        let mask: CIImage? = (geometry != nil && aiMask != nil) ? SkinMaskBuilder.buildMask(for: previewCI, geometry: geometry!, faceMask: aiMask!) : nil
-                        await MainActor.run {
-                            self.faceGeometry = geometry
-                            self.previewMask = mask
-                            self.noFaceDetected = (geometry == nil)
-                            self.isDetectingFace = false
-                            self.renderPreview()
-                        }
+                    let geometry = FaceDetector.detectGeometry(in: previewCG)
+                    let aiMask = (geometry != nil) ? SkinParserML.skinMask(for: previewCG) : nil
+                    let mask = aiMask.map { SkinMaskBuilder.buildMask(for: previewCI, skinMask: $0) }
+                    await MainActor.run {
+                        self.faceGeometry = geometry
+                        self.previewMask = mask
+                        self.noFaceDetected = (geometry == nil || mask == nil)
+                        self.isDetectingFace = false
+                        self.renderPreview()
                     }
                 }
             } else {
@@ -96,17 +83,14 @@ final class EditViewModel: ObservableObject {
             output = previewCI
         } else if isDetectingFace {
             output = previewCI
-        } else if FeatureFlags.semanticSkinParser, let previewMask {
+        } else if let previewMask {
             let scale = previewCI.extent.width / 2048.0
             let faceWidthRatio = faceGeometry?.faceBox.width ?? 0.5
-            let baseRadius = max(8.0, faceWidthRatio * previewCI.extent.width * 0.05)
-            let radius = min(max(baseRadius, 6.0 * scale), 24.0 * scale)
+            let baseRadius = max(6.0 * scale, faceWidthRatio * previewCI.extent.width * 0.05)
+            let radius = min(baseRadius, 15.0 * scale)
             output = SkinSmoothing.apply(to: previewCI, mask: previewMask, radius: radius, amount: amount)
-        } else if let faceGeometry, let previewMask {
-            let baseRadius = max(12.0, faceGeometry.faceBox.width * previewCI.extent.width * 0.08)
-            output = SkinSmoothing.apply(to: previewCI, mask: previewMask, radius: baseRadius, amount: amount)
         } else {
-            output = SmoothingFilter.apply(to: previewCI, radius: 24, amount: amount)
+            output = SmoothingFilter.apply(to: previewCI, radius: 15, amount: amount)
         }
 
         guard let output, !Task.isCancelled else { return }
@@ -130,7 +114,7 @@ final class EditViewModel: ObservableObject {
                 guard let ciImage = CIImage(image: normalizedImage) else { return nil }
 
                 let output: CIImage
-                if FeatureFlags.semanticSkinParser, let previewMask = currentMask {
+                if let previewMask = currentMask {
                     // Reuse existing preview mask, scaled up to full-resolution extent
                     let scaleX = ciImage.extent.width / previewMask.extent.width
                     let scaleY = ciImage.extent.height / previewMask.extent.height
@@ -138,17 +122,11 @@ final class EditViewModel: ObservableObject {
 
                     let scale = ciImage.extent.width / 2048.0
                     let faceWidthRatio = currentGeometry?.faceBox.width ?? 0.5
-                    let baseRadius = max(8.0, faceWidthRatio * ciImage.extent.width * 0.05)
-                    let radius = min(max(baseRadius, 6.0 * scale), 24.0 * scale)
+                    let baseRadius = max(6.0 * scale, faceWidthRatio * ciImage.extent.width * 0.05)
+                    let radius = min(baseRadius, 15.0 * scale)
                     output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: radius, amount: currentAmount)
-                } else if let faceGeometry = currentGeometry,
-                          let cgImage = normalizedImage.cgImage,
-                          let aiMask = FaceSegmenter.segmentFace(in: cgImage) {
-                    let fullMask = SkinMaskBuilder.buildMask(for: ciImage, geometry: faceGeometry, faceMask: aiMask)
-                    let baseRadius = max(12.0, faceGeometry.faceBox.width * ciImage.extent.width * 0.08)
-                    output = SkinSmoothing.apply(to: ciImage, mask: fullMask, radius: baseRadius, amount: currentAmount)
                 } else {
-                    output = SmoothingFilter.apply(to: ciImage, radius: 24, amount: currentAmount)
+                    output = SmoothingFilter.apply(to: ciImage, radius: 15, amount: currentAmount)
                 }
 
                 return try? ImageLoader.renderUIImage(from: output, scale: normalizedImage.scale)
