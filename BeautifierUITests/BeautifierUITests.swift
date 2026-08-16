@@ -7,20 +7,15 @@ final class BeautifierUITests: XCTestCase {
     }
 
     @MainActor
-    func testTryDemoPhotoLoadsEditViewAndInteractsWithSlider() throws {
+    func testDirectStartupPresentsEditViewAndInteractsWithSlider() throws {
         let app = XCUIApplication()
         app.launch()
-
-        let demoButton = app.buttons["TryDemoPhoto"]
-        XCTAssertTrue(demoButton.waitForExistence(timeout: 5.0), "Try Demo Photo button should exist")
-
-        demoButton.tap()
 
         let saveButton = app.buttons["SaveButton"]
         XCTAssertTrue(saveButton.waitForExistence(timeout: 5.0), "Save button should exist on Edit screen")
 
         let slider = app.sliders["SmoothingSlider"]
-        XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider element should exist")
+        XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider element should exist on startup")
 
         // Wait for background face detection to complete (spinner text disappears)
         let detectingText = app.staticTexts["Detecting face skin..."]
@@ -50,33 +45,12 @@ final class BeautifierUITests: XCTestCase {
     }
 
     @MainActor
-    func testNoFaceDetectedStateFallback() throws {
-        let app = XCUIApplication()
-        app.launch()
-
-        let noFaceButton = app.buttons["TryDemoNoFacePhoto"]
-        XCTAssertTrue(noFaceButton.waitForExistence(timeout: 5.0), "Try Demo (No Face) button should exist")
-
-        noFaceButton.tap()
-
-        let noFaceText = app.staticTexts["NoFaceDetectedText"]
-        XCTAssertTrue(noFaceText.waitForExistence(timeout: 10.0), "No face detected hint text should appear")
-
-        let slider = app.sliders["SmoothingSlider"]
-        XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider should exist")
-        XCTAssertFalse(slider.isEnabled, "Slider should be disabled when no face is detected")
-    }
-
-    @MainActor
     func testSliderInteractionRange() throws {
         let app = XCUIApplication()
         app.launch()
 
-        let demoButton = app.buttons["TryDemoPhoto"]
-        demoButton.tap()
-
         let slider = app.sliders["SmoothingSlider"]
-        XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider should exist")
+        XCTAssertTrue(slider.waitForExistence(timeout: 5.0), "Slider should exist on startup")
 
         // Wait for background face detection to complete
         let detectingText = app.staticTexts["Detecting face skin..."]

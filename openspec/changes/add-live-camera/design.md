@@ -1,72 +1,84 @@
-# Design — Live Camera Pipeline (v2)
+# Design — Live Camera Pipeline (v4)
 
-## 1. Frame budget
+## 1. Context & Objectives
 
-`SkinParserML` (512×512, ANE) ≈ 5–10ms on device; too heavy for every frame
-at 60fps combined with the blur chain. Faces move slowly: refresh the mask
-every 4th frame (~15Hz), reuse for the 3 frames between. Imperceptible lag.
+Live beautification reusing the Week 3.5 BiSeNet Core ML semantic pipeline.
+The static photo picker is deprecated; the live camera feed is the root scene.
+
+- **Acceptance Target:** Real-time preview rendering at ≥30 fps on device (with 60 fps as stretch).
+- **Inference Budget:** BiSeNet runs asynchronously on a dedicated serial inference queue (taking ~15–25ms on ANE), never blocking the 16.7ms/33.3ms Metal render loop.
+
+## 2. Architecture & Concurrency
 
 ```mermaid
-flowchart LR
-    A[AVCaptureVideoDataOutput] -->|CVPixelBuffer| B[LiveProcessor]
-    B --> C{frame % 4 == 0?}
-    C -- yes --> D[SkinParserML.skinMask + SkinMaskBuilder]
-    D --> E[update cachedMask/cachedFaceWidth]
-    C -- no --> F[reuse cachedMask]
-    E --> G[SkinSmoothing.apply clamped radius]
-    F --> G
-    G --> H[RenderContext → MTKView drawable]
+flowchart TD
+    A[AVCaptureVideoDataOutput] -->|Portrait Mirrored CVPixelBuffer| B[LiveProcessor]
+    B -->|Non-blocking dispatch| C{isInferring == false?}
+    C -- Yes --> D[Inference Queue: SkinParserML + Geometry]
+    D --> E[Validate & Publish latestMask / latestFaceWidth]
+    C -- No / Dropped Frame --> F[Keep Rendering with latestMask]
+    E --> G[Cache Invalidation Check: face lost or >15% bbox shift?]
+    G -- Invalid --> H[Clear Mask to nil]
+    G -- Valid --> I[SkinSmoothing.apply with latestMask]
+    H --> J[Bypass Smoothing]
+    I --> K[MTKView Metal Render]
+    J --> K
 ```
 
-## 2. Key decisions
+## 3. Decisions
 
-### D19 — Metal-backed preview
-`MTKView` wrapped in `UIViewRepresentable`; `framebufferOnly = false`;
-render each processed `CIImage` with the shared `RenderContext` CIContext
-(created with the MTKView's `device` — add
-`RenderContext.sharedFor(device:)` if needed). Never route frames through
-`UIImageView`/SwiftUI `Image`.
+### D1 — Asynchronous Non-Blocking Inference Queue
+- Rendering runs strictly on the frame callback / `MTKViewDelegate`.
+- `LiveProcessor` maintains a serial `DispatchQueue(label: "com.beautifier.inference", qos: .userInitiated)`.
+- When a new frame arrives, if `isInferring == false`, the buffer is submitted to the inference queue. If inference is still running from a previous frame, intermediate frames simply reuse `latestMask` without waiting or dropping render frames.
+- Rendering latency is bounded by the Metal shader pass (< 4ms).
 
-### D20 — Temporal mask caching in `LiveProcessor`
+### D2 — Deterministic AVFoundation Orientation & Mirroring
+- In `AVCaptureVideoDataOutput`, configure the connection:
+  - `connection.videoOrientation = .portrait` (or `videoRotationAngle = 90` on iOS 17+)
+  - `connection.isVideoMirrored = true` (for front camera)
+- `CVPixelBuffer` frames arrive in native portrait-mirrored BGRA format.
+- Preview rendering, Vision face geometry, Core ML BiSeNet parsing, mask transforms, and still captures all share this exact unified coordinate system without ad-hoc orientation guessing.
 
+### D3 — Cache Invalidation Rules
+`latestMask` is invalidated (`nil` = unblurred pass-through) when:
+1. Inference completes and detects no face or zero skin pixels (prevents ghost smoothing when a face exits frame).
+2. Face bounding box centroid shifts by > 15% or area shifts by > 20% before the next inference finishes.
+3. Camera device switches or application resumes from background.
+
+### D4 — Bounded Radius Formula (Aligned with Week 3.5 Spec)
+Radius strictly adheres to the 15px cap at 2048px scale:
 ```swift
-final class LiveProcessor {
-    private var cachedMask: CIImage?
-    private var cachedFaceWidth: CGFloat = 0
-    private var frameIndex = 0
-    var amount: Float = 0.5
-
-    func process(_ pixelBuffer: CVPixelBuffer) -> CIImage {
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        frameIndex += 1
-        if frameIndex % 4 == 0,
-           let cg = RenderContext.shared.createCGImage(image, from: image.extent) {
-            if let skin = SkinParserML.skinMask(for: cg) {
-                cachedMask = SkinMaskBuilder.buildMask(for: image, skinMask: skin)
-            }
-            cachedFaceWidth = FaceDetector.faceWidth(in: cg) ?? cachedFaceWidth
-        }
-        guard let mask = cachedMask else { return image }   // warm-up frames
-        let radius = min(max(cachedFaceWidth * image.extent.width * 0.04, 4),
-                         15 * image.extent.width / 2048)
-        return SkinSmoothing.apply(to: image, mask: mask, radius: radius, amount: amount)
-    }
-}
+let scale = frameWidth / 2048.0
+let baseRadius = max(6.0 * scale, faceWidthRatio * frameWidth * 0.05)
+let radius = min(baseRadius, 15.0 * scale)
 ```
 
-### D21 — Capture path reuses the editor
-Shutter → `AVCapturePhotoOutput` → `Data` → push existing
-`EditView(originalData:)`. One quality pipeline, one save path. No duplicate
-filter logic.
+### D5 — One Context, One Queue
+Coordinator owns a single `MTLCommandQueue = device.makeCommandQueue()`.
+All rendering uses `RenderContext.shared` (Metal-backed `CIContext`). No per-frame context/queue allocations.
 
-### D22 — Session hygiene
-Serial `sessionQueue`; `startRunning`/`stopRunning` only on that queue;
-stop the session in `onDisappear` (camera LED off = trust).
+### D6 — Aspect-Fill Viewport Scaling
+```swift
+let scale = max(drawableWidth / imageWidth, drawableHeight / imageHeight)
+let scaledSize = CGSize(width: imageWidth * scale, height: imageHeight * scale)
+let origin = CGPoint(x: (drawableWidth - scaledSize.width) / 2.0, y: (drawableHeight - scaledSize.height) / 2.0)
+```
+Renders centered aspect-fill without distortion.
 
-## 3. Risks
+### D7 — Capture Handoff
+Shutter button triggers `AVCapturePhotoOutput` → returns full-res still `Data` → navigates to `EditView(originalData:)` for fine-tuning and saving.
 
-| Risk | Response |
-|------|----------|
-| Simulator fps low (CPU ML) | Acceptable for dev; acceptance tests on device. |
-| Mask lag on fast motion | 4-frame cache ≈ 66ms at 60fps; raise to every-2nd-frame on A15+. |
-| Thermal on long sessions | Pause mask refresh when `ProcessInfo.thermalState` ≥ .serious. |
+### D8 — Lifecycle & Permission Management
+- Serial capture queue handles `startRunning()` and `stopRunning()`.
+- Capture session stops on `.onDisappear` and `scenePhase != .active`.
+- If camera permission is denied or restricted, displays a clean non-crashing overlay with a direct button to Open iOS Settings.
+
+## 4. Device Verification Metrics
+
+| Metric | Target | Method |
+|---|---|---|
+| **Render Frame Rate** | ≥30.0 FPS (avg duration ≤ 33.3ms) | Timestamp delta rolling average over 120 frames |
+| **Inference Latency** | ≤ 35ms / cycle on ANE | `os_signpost` / CFAbsoluteTime on inference queue |
+| **Lifecycle State** | Camera LED turns off immediately on background | `scenePhase` transition test |
+| **Memory Ceiling** | < 120MB active footprint | Xcode Memory Gauge / Instruments |

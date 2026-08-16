@@ -1,53 +1,61 @@
-# Tasks — Live Camera (v2)
+# Tasks — Live Camera Pipeline (v4)
 
-> Rules unchanged: in order, verify each, no improvisation.
-> PREREQUISITE: `v0.3.5-semantic-parser` tagged and §4 acceptance passed.
+> In order; verify each gate; no improvisation.
 
-## §1 Camera Service
+## §0 Baseline Cleanup & Spec Alignment
 
-- [ ] **1.1** Create `Core/Camera/CameraService.swift`: NSObject +
-  `AVCaptureVideoDataOutputSampleBufferDelegate`; serial `sessionQueue`;
-  front wide-angle camera; `AVCaptureVideoDataOutput` with
-  `kCVPixelFormatType_32BGRA`; also add `AVCapturePhotoOutput`.
+- [ ] **0.1** In `Beautifier/Features/Edit/EditViewModel.swift`:
+  - Align radius cap strictly to `min(max(baseRadius, 6.0 * scale), 15.0 * scale)` per `specs/image-editing/spec.md`.
+  - Remove dead legacy `FaceSegmenter` fallback code.
+  - **Verify:** `xcodebuild test` unit tests pass.
+
+## §1 Camera Service (AVFoundation)
+
+- [ ] **1.1** Create `Core/Camera/CameraService.swift`:
+  - Subclass `NSObject`, conform to `AVCaptureVideoDataOutputSampleBufferDelegate`, `AVCapturePhotoCaptureDelegate`.
+  - Configure `AVCaptureSession` with `.high` preset on front camera.
+  - Set `connection.videoOrientation = .portrait` (or `videoRotationAngle = 90` on iOS 17+) and `connection.isVideoMirrored = true`.
+  - Video output format: `kCVPixelFormatType_32BGRA`.
+  - Implement permission checks (`AVCaptureDevice.authorizationStatus`) and expose `@Published var isAuthorized: Bool`.
+  - Serial queue for `start()` / `stop()` session lifecycle.
+  - **Verify:** compiles and handles permissions cleanly.
+- [ ] **1.2** Add `AVCapturePhotoOutput` with `capturePhoto(completion:)` returning captured `Data`.
+- [ ] **1.3** Wire session `stop()` to `scenePhase != .active` and `onDisappear`.
+  - **Verify:** Green camera indicator LED turns off immediately when backgrounded.
+
+## §2 Metal Preview View
+
+- [ ] **2.1** Create `Features/Camera/MetalView.swift`:
+  - `UIViewRepresentable` wrapping `MTKView`.
+  - Coordinator owns a single `MTLCommandQueue` and renders via `RenderContext.shared`.
+  - Implement aspect-fill centering transform (D6) without stretching.
+  - **Verify:** Upright, un-stretched camera feed renders in Metal preview.
+- [ ] **2.2** Create `Features/Camera/CameraView.swift`:
+  - Camera preview layer with smoothing intensity `Slider` (0%–100%) and circular shutter button.
+  - Denied authorization overlay with direct "Open Settings" link.
+- [ ] **2.3** Update `BeautifierApp.swift` root to `CameraView` with NavigationStack handoff to `EditView`.
+  - **Verify:** App launches straight into live camera feed.
+
+## §3 Live Processor & Async Inference Queue
+
+- [ ] **3.1** Create `Core/Camera/LiveProcessor.swift`:
+  - Dedicated serial inference queue `DispatchQueue(label: "com.beautifier.inference")`.
+  - Non-blocking `isInferring` dispatch flag: incoming frame triggers inference without blocking render callback.
+  - Publishes atomic `latestMask` and `latestFaceWidth`.
+  - Implement cache invalidation rules (D3): clear mask when no face is found or bounding box shifts >15%.
+  - Apply `SkinSmoothing.apply` using `latestMask` and bounded radius formula (D4).
   - **Verify:** compiles.
-- [ ] **1.2** `start()` requests `AVCaptureDevice.requestAccess(for: .video)`,
-  then `session.startRunning()` on `sessionQueue`; `stop()` likewise.
-  - **Verify:** permission prompt appears; no crash on deny.
+- [ ] **3.2** Connect `LiveProcessor` into `MetalView` frame pipeline:
+  - **Verify on device:** Live skin smoothing active; eyes, hair, lips, background sharp; render frame rate ≥ 30 FPS.
 
-## §2 Metal Preview
+## §4 Shutter Handoff & Capture Flow
 
-- [ ] **2.1** Create `Features/Camera/MetalPreviewView.swift`:
-  `UIViewRepresentable` wrapping `MTKView` (`framebufferOnly = false`,
-  `device = MTLCreateSystemDefaultDevice()`); expose `render(ciImage:)`
-  using `RenderContext`.
-  - **Verify:** compiles.
-- [ ] **2.2** Create `Features/Camera/CameraView.swift`: ZStack of
-  MetalPreviewView + circular shutter button + close button;
-  `CameraViewModel` pumps `CameraService` frames → preview (NO smoothing yet).
-  - **Verify:** raw live feed renders on device.
+- [ ] **4.1** Wire shutter button in `CameraView` to `camera.capturePhoto()`.
+- [ ] **4.2** On capture, transition to `EditView(originalData: data)` for fine-tuning and saving to Photos.
+  - **Verify:** Captured image is high-resolution, correctly oriented, and editable.
 
-## §3 Live Smoothing
+## §5 Performance & Device Verification
 
-- [ ] **3.1** Create `Core/Camera/LiveProcessor.swift` — exact code design §D20
-  (plus `FaceDetector.faceWidth(in:)` helper returning normalized width).
-  - **Verify:** compiles.
-- [ ] **3.2** Wire frames: CameraService → LiveProcessor → MetalPreviewView;
-  bind a slider overlay to `processor.amount`.
-  - **Verify:** live smoothing visible; eyes/lips sharp; background untouched;
-    ≥30fps on device.
-
-## §4 Shutter & Polish
-
-- [ ] **4.1** Shutter → `AVCapturePhotoOutput.capturePhoto` → `Data` →
-  present `EditView(originalData: data)`.
-  - **Verify:** captured still opens in editor with identical quality to the
-    photo-import path.
-- [ ] **4.2** Stop session in `onDisappear`; resume correctly on re-entry.
-- [ ] **4.3** Append "Week 4" section to `reqs.md`; tick acceptance:
-  - [ ] live smoothing on device ≥30fps
-  - [ ] mask refresh invisible (no popping)
-  - [ ] thermal-safe over a 5-minute session
-  - [ ] camera LED off after closing the screen
-- [ ] **4.4** Tag `v0.4.0-week4`; move `add-live-camera` and
-  `add-semantic-skin-parser` to `openspec/changes/archive/`; update
-  `openspec/STATUS.md`.
+- [ ] **5.1** Instrument rolling FPS counter and assert ≥ 30.0 FPS on iPhone hardware.
+- [ ] **5.2** Verify unit and UI tests pass green.
+- [ ] **5.3** Append Week 4 acceptance records to `reqs.md` and tag `v0.4.0-live-camera`.

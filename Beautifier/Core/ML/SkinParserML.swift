@@ -1,5 +1,6 @@
 import Vision
 import CoreML
+import CoreImage
 
 /// Runs the BiSeNet face-parsing Core ML model and returns a grayscale
 /// skin-probability `CIImage` at model resolution (512×512).
@@ -9,7 +10,8 @@ enum SkinParserML {
         let config = MLModelConfiguration()
         config.computeUnits = .all          // ANE on device, CPU on Simulator
         let model = try! FaceParserSkin(configuration: config).model
-        let req = try! VNCoreMLRequest(model: model)
+        let vnModel = try! VNCoreMLModel(for: model)
+        let req = VNCoreMLRequest(model: vnModel)
         req.imageCropAndScaleOption = .scaleFill   // center-crop to 512×512
         return req
     }()

@@ -1,26 +1,17 @@
-# Change: Add Live Camera Pipeline (Week 4) — v2
-
-> **STATUS: BLOCKED on `add-semantic-skin-parser`.** Do not start until
-> v0.3.5 ships. v2 replaces all `FaceSegmenter` references with
-> `SkinParserML` (FaceSegmenter is deleted by Week 3.5).
+# Change: Add Live Camera Pipeline (Week 4)
 
 ## Why
 
-A static editor is a utility; a live beautifier is a product. This change
-streams the camera through the (now-correct) semantic skin pipeline at
-30–60fps.
+A static photo editor is a utility; a live beautifier is a product. Users expect to see the skin smoothing effect in real-time before they snap the photo. This change adapts our existing GPU/ML pipeline to process a live `CMSampleBuffer` stream from the camera at 60fps, replacing the static photo picker as the primary app entry point.
 
 ## What Changes
 
-- **NEW** `Core/Camera/CameraService.swift` — AVCaptureSession + video data
-  output + photo output.
-- **NEW** `Core/Camera/LiveProcessor.swift` — applies `SkinSmoothing` per
-  frame; refreshes the `SkinParserML` mask every 4th frame (temporal caching).
-- **NEW** `Features/Camera/` — `CameraView`, `MetalPreviewView`,
-  `CameraViewModel`.
-- **MODIFIED** `HomeView` — "Live Camera" entry point.
+- **NEW** `Core/Camera/CameraService.swift` — wraps `AVCaptureSession` to deliver live video frames.
+- **NEW** `Core/Camera/LiveProcessor.swift` — applies the `SkinSmoothing` pipeline to live frames. Implements temporal mask caching (running the BiSeNet ML model every 4th frame) to maintain 60fps.
+- **NEW** `Features/Camera/` — `CameraView` (SwiftUI), `MetalView` (MTKView wrapper).
+- **MODIFIED** `BeautifierApp.swift` — launches directly into `CameraView`.
 
 ## Impact
 
-- Affected specs: `image-editing` (live delta), new `camera` capability.
-- Permissions: `NSCameraUsageDescription` already present in Info.plist.
+- **Affected specs:** New `camera` capability.
+- **Dependencies:** AVFoundation, MetalKit.

@@ -30,34 +30,91 @@ final class BeautifierPipelineTests: XCTestCase {
     }
 
     /// Verify that the new SkinMaskBuilder.buildMask(for:skinMask:) applies
-    /// a 3px Gaussian feather blur (output is not identical to the scaled mask).
+    /// a 3px Gaussian feather blur (output creates a smooth transition at sharp boundaries).
     func testSkinMaskBuilderNewPipelineFeathersMask() throws {
         let sourceSize = CGSize(width: 1024, height: 1024)
         let maskSize = CGSize(width: 512, height: 512)
 
         let source = CIImage(color: .blue).cropped(to: CGRect(origin: .zero, size: sourceSize))
-        // Create a mask with a sharp white rectangle in the center
-        let sharpMask = CIImage(color: .black)
-            .applyingFilter("CIRadialGradient", parameters: [
-                kCIInputCenterKey: CIVector(x: 0.5, y: 0.5),
-                kCIInputRadiusKey: 0.25
-            ]).cropped(to: CGRect(origin: .zero, size: maskSize))
+        // Create a mask with a sharp white box on the left half and black on the right half
+        let whiteRect = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 256, height: 512))
+        let blackRect = CIImage(color: .black).cropped(to: CGRect(x: 256, y: 0, width: 256, height: 512))
+        let sharpMask = whiteRect.composited(over: blackRect).cropped(to: CGRect(origin: .zero, size: maskSize))
 
         let output = SkinMaskBuilder.buildMask(for: source, skinMask: sharpMask)
 
-        // The output should NOT be identical to a simple scale — the 3px blur
-        // should soften the edges, producing a different pixel distribution.
-        guard let originalCG = RenderContext.shared.createCGImage(sharpMask, from: sharpMask.extent),
-              let outputCG = RenderContext.shared.createCGImage(output, from: output.extent) else {
-            XCTFail("Failed to render masks")
+        guard let outputCG = RenderContext.shared.createCGImage(output, from: output.extent) else {
+            XCTFail("Failed to render feathered mask")
             return
         }
 
-        let originalVariance = pixelVariance(of: originalCG)
-        let outputVariance = pixelVariance(of: outputCG)
-        // The feathered output should have lower variance (softer edges)
-        XCTAssertLessThan(outputVariance, originalVariance,
-            "Feathered mask should have lower variance than sharp mask")
+        // At the boundary (x = 0.5), blur creates an intermediate gradient pixel value (between 0.1 and 0.9)
+        let edgeBrightness = getPixelBrightness(of: outputCG, atNormalized: CGPoint(x: 0.5, y: 0.5))
+        XCTAssertGreaterThan(edgeBrightness, 0.1, "Edge pixel should have feathered brightness > 0.1")
+        XCTAssertLessThan(edgeBrightness, 0.9, "Edge pixel should have feathered brightness < 0.9")
+    }
+
+    /// Verify that SkinParserML produces a non-nil skin-probability mask for a real face photo.
+    func testSkinParserMLGeneratesMaskForFaceImage() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            XCTFail("Failed to load test_face.jpg CGImage")
+            return
+        }
+
+        let mask = SkinParserML.skinMask(for: cgImage)
+        XCTAssertNotNil(mask, "SkinParserML should produce a non-nil mask for test_face.jpg")
+        if let mask = mask {
+            XCTAssertEqual(mask.extent.width, 512, accuracy: 1.0)
+            XCTAssertEqual(mask.extent.height, 512, accuracy: 1.0)
+        }
+    }
+
+    /// Detailed verification of the full smoothing pipeline on a real face photo
+    func testInspectRenderPipeline() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 2048)
+        guard let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent) else {
+            XCTFail("Failed to create previewCG")
+            return
+        }
+
+        guard let aiMask = SkinParserML.skinMask(for: previewCG) else {
+            XCTFail("SkinParserML returned nil")
+            return
+        }
+
+        let mask = SkinMaskBuilder.buildMask(for: previewCI, skinMask: aiMask)
+        let smoothed0 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 0.0)
+        let smoothed50 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 0.5)
+        let smoothed100 = SkinSmoothing.apply(to: previewCI, mask: mask, radius: 16, amount: 1.0)
+
+        guard let cgOrig = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let cgMask = RenderContext.shared.createCGImage(mask, from: mask.extent),
+              let cgSoft = RenderContext.shared.createCGImage(SmoothingFilter.apply(to: previewCI, radius: 16, amount: 1.0), from: previewCI.extent),
+              let cgSmoothed = RenderContext.shared.createCGImage(smoothed100, from: smoothed100.extent) else {
+            XCTFail("Failed to render CGImages")
+            return
+        }
+
+        print("DEBUG_PIPELINE: previewCI.extent=\(previewCI.extent)")
+        print("DEBUG_PIPELINE: aiMask.extent=\(aiMask.extent)")
+        print("DEBUG_PIPELINE: mask.extent=\(mask.extent)")
+
+        let origVar = pixelVariance(of: cgOrig)
+        let maskBright = averageBrightness(of: cgMask)
+        let softVar = pixelVariance(of: cgSoft)
+        let smoothedVar = pixelVariance(of: cgSmoothed)
+
+        print("DEBUG_PIPELINE: origVar=\(origVar), softVar=\(softVar), maskAvgBrightness=\(maskBright), smoothedVar=\(smoothedVar)")
+        XCTAssertGreaterThan(maskBright, 0.01, "Mask brightness must be non-zero")
+        XCTAssertLessThan(softVar, origVar, "Softened image variance must be lower than original")
+        XCTAssertLessThan(smoothedVar, origVar, "Smoothed image variance must be lower than original")
     }
 
     // MARK: - Legacy Pipeline Tests (still valid when flag is false)
