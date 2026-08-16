@@ -76,10 +76,27 @@ enum SkinMaskBuilder {
     static func buildMask(for image: CIImage, skinMask: CIImage) -> CIImage {
         let scaleX = image.extent.width  / skinMask.extent.width
         let scaleY = image.extent.height / skinMask.extent.height
-        return skinMask
+        let scaledMask = skinMask
             .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
             .clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3])
             .cropped(to: image.extent)
+
+        // Compute high-contrast edges from image to protect facial contours (jawline, nose contours, eyelid creases)
+        let edges = image
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0, kCIInputContrastKey: 1.5])
+            .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 8.0])
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.5])
+            .cropped(to: image.extent)
+
+        // Invert edges: 1.0 on smooth regions, 0.0 on sharp contour edges
+        let invertedEdges = edges.applyingFilter("CIColorInvert")
+
+        // Multiply skin mask with inverted edges so sharp contour lines are not blurred
+        let protectedMask = scaledMask.applyingFilter("CIMultiplyCompositing", parameters: [
+            kCIInputBackgroundImageKey: invertedEdges
+        ]).cropped(to: image.extent)
+
+        return protectedMask
     }
 }

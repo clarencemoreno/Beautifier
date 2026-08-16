@@ -323,6 +323,74 @@ final class BeautifierPipelineTests: XCTestCase {
         XCTAssertLessThan(smoothedVar, origVar, "Full-resolution saved output must have smoothing applied (lower pixel variance)")
     }
 
+    /// Verify that facial contour preservation retains edge gradients on real face photos
+    func testFacialContourPreservationRetainsEdgeGradients() throws {
+        let path = "/Users/clycesbon/code/projects/Beautifier/Beautifier/test_face.jpg"
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+
+        let previewCI = try ImageLoader.downsampledPreviewCIImage(from: data, maxDimension: 2048)
+        guard let previewCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let aiMask = SkinParserML.skinMask(for: previewCG) else {
+            XCTFail("Failed to detect face or generate mask")
+            return
+        }
+
+        let protectedMask = SkinMaskBuilder.buildMask(for: previewCI, skinMask: aiMask)
+        let smoothed = SkinSmoothing.apply(to: previewCI, mask: protectedMask, radius: 16, amount: 1.0)
+
+        // Compute edge intensity map of original vs smoothed image
+        let origEdgesCI = previewCI
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
+            .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 3.0])
+        let smoothEdgesCI = smoothed
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
+            .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 3.0])
+
+        guard let origEdgesCG = RenderContext.shared.createCGImage(origEdgesCI, from: origEdgesCI.extent),
+              let smoothEdgesCG = RenderContext.shared.createCGImage(smoothEdgesCI, from: smoothEdgesCI.extent),
+              let origCG = RenderContext.shared.createCGImage(previewCI, from: previewCI.extent),
+              let smoothCG = RenderContext.shared.createCGImage(smoothed, from: smoothed.extent) else {
+            XCTFail("Failed to render edge comparison CGImages")
+            return
+        }
+
+        let origEdgeBrightness = averageBrightness(of: origEdgesCG)
+        let smoothEdgeBrightness = averageBrightness(of: smoothEdgesCG)
+        let origVariance = pixelVariance(of: origCG)
+        let smoothVariance = pixelVariance(of: smoothCG)
+
+        // Skin surface variance is significantly smoothed
+        XCTAssertLessThan(smoothVariance, origVariance, "Skin surface variance should decrease with smoothing")
+
+        // Edge gradient retention across the frame should retain >60% of structural definitions (while micro-pores are smoothed)
+        let retention = smoothEdgeBrightness / max(origEdgeBrightness, 0.001)
+        XCTAssertGreaterThan(retention, 0.60, "Facial contour edges must retain >60% definition (measured \(retention * 100)%)")
+    }
+
+    /// Verify simulator dynamic moving feed produces continuous valid frames for offline testing
+    func testDynamicMovingSimulatorFeedProducesContinuousSmoothedFrames() throws {
+        let camera = CameraService()
+        let processor = LiveProcessor()
+
+        camera.start()
+        let exp = XCTestExpectation(description: "Simulator feed produces frames")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            guard let buffer = camera.latestPixelBuffer else {
+                XCTFail("Simulator feed should produce valid latestPixelBuffer")
+                return
+            }
+            let ciImage = CIImage(cvPixelBuffer: buffer)
+            let processed = processor.process(image: ciImage, amount: 0.8, buffer: buffer, frameSequence: camera.frameSequence)
+            XCTAssertNotNil(processed)
+            XCTAssertEqual(processed.extent.width, 720)
+            XCTAssertEqual(processed.extent.height, 1080)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 1.0)
+        camera.stop()
+    }
+
     // MARK: - Legacy Pipeline Tests (still valid when flag is false)
 
     /// Verify that FaceSegmenter produces a non-nil AI face segmentation mask for a face photo.
