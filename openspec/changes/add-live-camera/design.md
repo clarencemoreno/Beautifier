@@ -1,35 +1,61 @@
-# Design — Live Camera Pipeline
+# Design — Live Camera Pipeline (v3)
 
-## 1. Context & Constraints
+## 1. Context
 
-Processing a live camera feed requires balancing high visual quality with strict frame budgets (16ms for 60fps). 
-Running the `SkinParserML` (BiSeNet) model takes ~15-25ms on the Neural Engine. Running it on *every* frame will cause dropped frames and jank.
+Live 60fps beautification reusing the Week 3.5 semantic pipeline.
+Static picker flow is deprecated; camera is the root scene.
 
-**The Solution:** Temporal Caching. We run the heavy ML inference on a low-frequency timer (e.g., every 4th frame), and reuse the cached mask for the frames in between. Faces don't move wildly in 60ms, so a slightly stale mask is imperceptible to the user.
+## 2. Frame budget & Temporal Caching
 
-## 2. Architecture
+SkinParserML ≈ 15–25ms (ANE). Budget is 16ms/frame. Therefore:
+refresh ML mask every 4th frame; reuse cached mask between refreshes
+(~66ms staleness at 60fps — imperceptible for faces).
 
-```mermaid
-flowchart LR
-    A[AVCaptureVideoDataOutput] -->|CVPixelBuffer| B[LiveProcessor]
-    B --> C{frame % 4 == 0?}
-    C -- yes --> D[SkinParserML.skinMask]
-    D --> E[Update cachedMask]
-    C -- no --> F[Reuse cachedMask]
-    E --> G[SkinSmoothing.apply]
-    F --> G
-    G --> H[MTKView Render]
-```
+## 3. Decisions
 
-## 3. Key Decisions
+### D1 — One context, one queue
+Coordinator owns `let commandQueue = device.makeCommandQueue()`.
+All rendering uses `RenderContext.shared` (already Metal-backed).
+No per-frame allocation of contexts/queues. Delete the
+`mtlCommandQueue` extension hack from the Phase-1 sketch.
 
-### D1 — Metal-backed preview (`MTKView`)
-Rendering `CIImage` to a standard SwiftUI `Image` 60 times a second causes massive CPU overhead. We must render the `CIImage` directly to a Metal drawable. We will wrap `MTKView` in a `UIViewRepresentable`.
+### D2 — Temporal caching
+`LiveProcessor.process(_ image: CIImage) -> CIImage`:
+`frameIndex % 4 == 0` → run `SkinParserML.skinMask` (+ `FaceDetector`
+for radius sizing) on that frame, store `cachedMask`/`cachedFaceWidth`;
+every frame → `SkinSmoothing.apply` with cached values.
+Warm-up frames (no mask yet) return the image unmodified.
 
-### D2 — Temporal Mask Caching in `LiveProcessor`
-The processor maintains a `cachedMask: CIImage?` and a `frameCount: Int`.
-- If `frameCount % 4 == 0`, run `SkinParserML` on the current frame, update `cachedMask`.
-- For all frames, apply `SkinSmoothing.apply` using the `cachedMask`.
+### D3 — Mirroring
+`connection.isVideoMirrored = true` on the video output. Buffers arrive
+pre-mirrored; Vision and rendering operate in that same space. No extra flips.
 
-### D3 — Camera Mirror
-The front camera feed must be horizontally mirrored (`connection.isVideoMirrored = true`) so it behaves like a standard mirror for the user.
+### D4 — Orientation & portrait lock
+Sensor buffers are landscape. Lock the app to portrait
+(Info.plist `UISupportedInterfaceOrientations` = portrait only) and rotate
+each frame once: `CIImage(cvPixelBuffer:).oriented(.right)`
+(verify empirically on device; use `.left` if inverted).
+The ML refresh frame and every render frame use the SAME oriented image.
+
+### D5 — Aspect-fill preview
+scale = max(drawableW/imgW, drawableH/imgH); translate to center;
+crop to drawable bounds. Never scale X/Y independently (no stretching).
+
+### D6 — Radius formula (live)
+Reuse Week 3.5: `radius = clamp(faceWidth * frameW * 0.05, 6*s, 24*s)`
+with `s = frameW / 2048`.
+
+### D7 — Capture handoff
+Shutter → `AVCapturePhotoOutput` → `Data` → push existing `EditView`
+(prototype editor) for save. No duplicate filter logic.
+
+### D8 — Lifecycle & permissions
+`start()`/`stop()` on serial queue; stop on `scenePhase != .active` and
+`onDisappear`. Denied camera auth → overlay with Settings link, no crash.
+
+## 4. Risks
+
+| Risk | Response |
+|------|----------|
+| Simulator fps low (CPU ML) | Acceptance on device only. |
+| Thermal throttling | STRETCH: halve refresh rate when thermalState ≥ .serious. |

@@ -1,11 +1,14 @@
 # OpenSpec Status
 
-| Change | Scope | State | Notes |
-|---|---|---|---|
-| `restructure-core-beautifier-mvp` | Week 1 (Core Engine) | SHIPPED | Core pipeline established. |
-| `add-skin-aware-smoothing` | Week 2 (Skin Mask) | SHIPPED | Color heuristics & landmark exclusions. |
-| `add-ml-skin-parser` | Week 3 (Vision Segmentation) | SUPERSEDED | Replaced by BiSeNet. |
-| `add-semantic-skin-parser` | Week 3.5 (BiSeNet ML) | SHIPPED | Core ML model integrated. |
-| `add-live-camera` | Week 4 (Live Pipeline) | **ACTIVE** | Supersedes static photo picker UI. |
+| Change | Scope | State | Tag | Location |
+|---|---|---|---|---|
+| restructure-core-beautifier-mvp | Week 1 | SHIPPED | v0.1.0 | archive/ |
+| fix-beautifier-build-and-app | Week 1 hotfix | SHIPPED | v0.1.x | archive/ |
+| add-skin-aware-smoothing | Week 2 | SHIPPED | v0.2.0-week2 | archive/ |
+| add-ml-skin-parser | Week 3 | SHIPPED → SUPERSEDED | v0.3.0-week3 | archive/ |
+| add-semantic-skin-parser | Week 3.5 | SHIPPED | PR #3 | archive/ |
+| add-live-camera | Week 4 | **ACTIVE** | — | changes/ |
 
-**Note:** The static photo picker UI (`Features/Home`, `PhotosPicker`) is deprecated for the MVP. The app now launches directly into the live camera.
+Requirements live in `reqs.md` (repo root).
+Deprecated for MVP: photo-picker entry flow (`HomeView`). `EditView` remains
+as the post-capture adjustment screen only.

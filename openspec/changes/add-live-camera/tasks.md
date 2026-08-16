@@ -1,53 +1,53 @@
-# Tasks — Live Camera Pipeline
+# Tasks — Live Camera (v3)
 
-> **Rules:** Follow design.md exactly. Verify each step.
+> In order; verify each; no improvisation. Superseded items removed.
 
-## §1 Camera Service (AVFoundation)
+## §0 Housekeeping
 
-- [ ] **1.1** Create `Core/Camera/CameraService.swift`:
-  - Subclass `NSObject`, conform to `AVCaptureVideoDataOutputSampleBufferDelegate`.
-  - Setup `AVCaptureSession` with `.high` preset.
-  - Add `AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)`.
-  - Add `AVCaptureVideoDataOutput` with `[kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA]`.
-  - Implement `captureOutput(_:didOutput:from:)` to extract `CVPixelBuffer` and publish it to `@Published var latestPixelBuffer`.
-  - Add `start()` and `stop()` methods that run on a serial background queue.
+- [ ] **0.1** Move shipped changes to `openspec/changes/archive/`
+  (incl. `add-semantic-skin-parser` once PR #3 merged); write STATUS.md above.
+- [ ] **0.2** Verify build green before starting §1.
+
+## §1 Camera Service
+
+- [ ] **1.1** `Core/Camera/CameraService.swift` per earlier draft PLUS:
+  - `start()` checks `AVCaptureDevice.authorizationStatus(for: .video)`;
+    requests if `.notDetermined`; exposes `@Published var isAuthorized`.
   - **Verify:** compiles.
+- [ ] **1.2** `stop()` wired to `onDisappear` AND `scenePhase` background.
+  - **Verify:** camera LED off when leaving screen / backgrounding.
 
-## §2 Metal Preview View
+## §2 Metal Preview (orientation + aspect correct)
 
-- [ ] **2.1** Create `Features/Camera/MetalView.swift`:
-  - Wrap `MTKView` in a `UIViewRepresentable`.
-  - In `makeUIView`, create an `MTKView` with `framebufferOnly = false` and `device = MTLCreateSystemDefaultDevice()`.
-  - Create a `Coordinator` class conforming to `MTKViewDelegate`.
-  - In `draw(in:)`, convert the `CVPixelBuffer` to `CIImage`, apply a temporary global `CIGaussianBlur` (to verify the pipeline), and render it to `view.currentDrawable.texture` using the `CIContext`.
+- [ ] **2.1** `Features/Camera/MetalView.swift`: Coordinator owns ONE
+  `MTLCommandQueue`; renders via `RenderContext.shared`; applies D4 rotation
+  and D5 aspect-fill; NO temporary blur, NO second CIContext, NO
+  `mtlCommandQueue` hack.
+  - **Verify:** live feed upright, fills screen, faces not stretched.
+- [ ] **2.2** `CameraView.swift` with slider + shutter; denied-auth overlay
+  when `!camera.isAuthorized`.
+- [ ] **2.3** `BeautifierApp.swift` root = `CameraView`; DELETE the PR #3
+  `demoImageData` launch-into-EditView hack.
+  - **Verify:** app opens to live camera.
+
+## §3 Live Processor
+
+- [ ] **3.1** `Core/Camera/LiveProcessor.swift` per D2/D6.
   - **Verify:** compiles.
+- [ ] **3.2** Wire buffer → LiveProcessor → MetalView.
+  - **Verify on device:** skin-only smoothing live; eyes/lips sharp;
+    ≥30fps; mask refresh invisible.
 
-- [ ] **2.2** Create `Features/Camera/CameraView.swift`:
-  - `@StateObject private var camera = CameraService()`.
-  - ZStack containing `MetalView(pixelBuffer: $camera.latestPixelBuffer)` and a bottom overlay with a smoothing `Slider` and a circular shutter button.
-  - Call `camera.start()` in `.onAppear` and `camera.stop()` in `.onDisappear`.
-  - **Verify:** Running the app shows the raw, mirrored camera feed live on a physical device.
+## §4 Capture
 
-- [ ] **2.3** Update `BeautifierApp.swift` to launch directly into `CameraView()`.
-  - **Verify:** App opens directly to the camera.
+- [ ] **4.1** `AVCapturePhotoOutput` + `capturePhoto()`; shutter wired.
+- [ ] **4.2** Captured `Data` → `EditView(originalData:)`.
+  - **Verify:** captured still opens in editor and saves correctly.
 
-## §3 Live Processor & Temporal Caching
+## §5 Cleanup & Docs
 
-- [ ] **3.1** Create `Core/Camera/LiveProcessor.swift`:
-  - Add `var cachedMask: CIImage?` and `var frameCount = 0`.
-  - Implement `process(image: CIImage) -> CIImage`.
-  - Every 4 frames (`frameCount % 4 == 0`), run `SkinParserML.skinMask(for:)` and update `cachedMask`.
-  - For all frames, apply `SkinSmoothing.apply(to: mask: radius: amount:)` using the `cachedMask`.
-  - **Verify:** compiles.
-
-- [ ] **3.2** Wire the processor into `MetalView`:
-  - Pass the `CVPixelBuffer` through `LiveProcessor` before rendering to the Metal drawable.
-  - **Verify:** Moving the phone around shows real-time, skin-aware smoothing at ~60fps.
-
-## §4 Shutter & Polish
-
-- [ ] **4.1** Add `AVCapturePhotoOutput` to `CameraService`.
-- [ ] **4.2** Implement `capturePhoto()` in `CameraService` that triggers a high-res still capture.
-- [ ] **4.3** In `CameraView`, wire the shutter button to `capturePhoto()`.
-- [ ] **4.4** When the photo is captured, convert it to `Data` and present the existing `EditView(originalData: data)` so the user can apply final tweaks and save it to the Photos library.
-- [ ] **4.5** Tag the commit `v0.4.0-live-camera`.
+- [ ] **5.1** If unreferenced after §2.3: delete `HomeView.swift` and any
+  picker-only tests. **Verify:** build + tests green.
+- [ ] **5.2** Append "Week 4" section to `reqs.md`; tick acceptance:
+  live ≥30fps on device; upright preview; denied-auth overlay; LED off on exit.
+- [ ] **5.3** Tag `v0.4.0-live-camera`.
