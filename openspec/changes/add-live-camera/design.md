@@ -1,72 +1,35 @@
-# Design — Live Camera Pipeline (v2)
+# Design — Live Camera Pipeline
 
-## 1. Frame budget
+## 1. Context & Constraints
 
-`SkinParserML` (512×512, ANE) ≈ 5–10ms on device; too heavy for every frame
-at 60fps combined with the blur chain. Faces move slowly: refresh the mask
-every 4th frame (~15Hz), reuse for the 3 frames between. Imperceptible lag.
+Processing a live camera feed requires balancing high visual quality with strict frame budgets (16ms for 60fps). 
+Running the `SkinParserML` (BiSeNet) model takes ~15-25ms on the Neural Engine. Running it on *every* frame will cause dropped frames and jank.
+
+**The Solution:** Temporal Caching. We run the heavy ML inference on a low-frequency timer (e.g., every 4th frame), and reuse the cached mask for the frames in between. Faces don't move wildly in 60ms, so a slightly stale mask is imperceptible to the user.
+
+## 2. Architecture
 
 ```mermaid
 flowchart LR
     A[AVCaptureVideoDataOutput] -->|CVPixelBuffer| B[LiveProcessor]
     B --> C{frame % 4 == 0?}
-    C -- yes --> D[SkinParserML.skinMask + SkinMaskBuilder]
-    D --> E[update cachedMask/cachedFaceWidth]
-    C -- no --> F[reuse cachedMask]
-    E --> G[SkinSmoothing.apply clamped radius]
+    C -- yes --> D[SkinParserML.skinMask]
+    D --> E[Update cachedMask]
+    C -- no --> F[Reuse cachedMask]
+    E --> G[SkinSmoothing.apply]
     F --> G
-    G --> H[RenderContext → MTKView drawable]
+    G --> H[MTKView Render]
 ```
 
-## 2. Key decisions
+## 3. Key Decisions
 
-### D19 — Metal-backed preview
-`MTKView` wrapped in `UIViewRepresentable`; `framebufferOnly = false`;
-render each processed `CIImage` with the shared `RenderContext` CIContext
-(created with the MTKView's `device` — add
-`RenderContext.sharedFor(device:)` if needed). Never route frames through
-`UIImageView`/SwiftUI `Image`.
+### D1 — Metal-backed preview (`MTKView`)
+Rendering `CIImage` to a standard SwiftUI `Image` 60 times a second causes massive CPU overhead. We must render the `CIImage` directly to a Metal drawable. We will wrap `MTKView` in a `UIViewRepresentable`.
 
-### D20 — Temporal mask caching in `LiveProcessor`
+### D2 — Temporal Mask Caching in `LiveProcessor`
+The processor maintains a `cachedMask: CIImage?` and a `frameCount: Int`.
+- If `frameCount % 4 == 0`, run `SkinParserML` on the current frame, update `cachedMask`.
+- For all frames, apply `SkinSmoothing.apply` using the `cachedMask`.
 
-```swift
-final class LiveProcessor {
-    private var cachedMask: CIImage?
-    private var cachedFaceWidth: CGFloat = 0
-    private var frameIndex = 0
-    var amount: Float = 0.5
-
-    func process(_ pixelBuffer: CVPixelBuffer) -> CIImage {
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        frameIndex += 1
-        if frameIndex % 4 == 0,
-           let cg = RenderContext.shared.createCGImage(image, from: image.extent) {
-            if let skin = SkinParserML.skinMask(for: cg) {
-                cachedMask = SkinMaskBuilder.buildMask(for: image, skinMask: skin)
-            }
-            cachedFaceWidth = FaceDetector.faceWidth(in: cg) ?? cachedFaceWidth
-        }
-        guard let mask = cachedMask else { return image }   // warm-up frames
-        let radius = min(max(cachedFaceWidth * image.extent.width * 0.04, 4),
-                         15 * image.extent.width / 2048)
-        return SkinSmoothing.apply(to: image, mask: mask, radius: radius, amount: amount)
-    }
-}
-```
-
-### D21 — Capture path reuses the editor
-Shutter → `AVCapturePhotoOutput` → `Data` → push existing
-`EditView(originalData:)`. One quality pipeline, one save path. No duplicate
-filter logic.
-
-### D22 — Session hygiene
-Serial `sessionQueue`; `startRunning`/`stopRunning` only on that queue;
-stop the session in `onDisappear` (camera LED off = trust).
-
-## 3. Risks
-
-| Risk | Response |
-|------|----------|
-| Simulator fps low (CPU ML) | Acceptable for dev; acceptance tests on device. |
-| Mask lag on fast motion | 4-frame cache ≈ 66ms at 60fps; raise to every-2nd-frame on A15+. |
-| Thermal on long sessions | Pause mask refresh when `ProcessInfo.thermalState` ≥ .serious. |
+### D3 — Camera Mirror
+The front camera feed must be horizontally mirrored (`connection.isVideoMirrored = true`) so it behaves like a standard mirror for the user.
